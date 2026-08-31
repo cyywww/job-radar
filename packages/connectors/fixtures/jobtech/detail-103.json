@@ -1,0 +1,20 @@
+{
+  "id": "fictional-job-103",
+  "webpage_url": "https://arbetsformedlingen.se/platsbanken/annonser/fictional-job-103",
+  "headline": "Platform Engineer",
+  "application_deadline": "2026-12-31",
+  "description": {
+    "text": "Fictional Pine Cloud needs a platform engineer to maintain TypeScript services, observability, and SQLite-backed internal tools. The workplace arrangement is discussed during the interview.",
+    "text_formatted": null
+  },
+  "employment_type": { "label": "Fixed term" },
+  "employer": { "name": "Fictional Pine Cloud AB" },
+  "workplace_address": {
+    "municipality": "Uppsala",
+    "region": "Uppsala län",
+    "country": "Sweden"
+  },
+  "publication_date": "2026-08-20T12:30:00Z",
+  "removed": false,
+  "source_type": "FIXTURE"
+}

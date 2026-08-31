@@ -1,0 +1,27 @@
+{
+  "id": "fictional-job-101",
+  "external_id": "fictional-dxa-101",
+  "webpage_url": "https://arbetsformedlingen.se/platsbanken/annonser/fictional-job-101?utm_source=fixture",
+  "headline": "Product Engineer",
+  "application_deadline": "2026-12-15",
+  "description": {
+    "text": "Northstar Example Works builds imaginary local-first tools. You will design accessible React interfaces, implement TypeScript services, and collaborate with a fictional product team. The role is fully remote within Sweden.",
+    "text_formatted": "<p>Northstar Example Works builds imaginary local-first tools.</p><p>You will design accessible React interfaces, implement TypeScript services, and collaborate with a fictional product team. The role is fully remote within Sweden.</p>",
+    "company_information": "A fictional employer used only by deterministic tests."
+  },
+  "employment_type": { "concept_id": "fixture-permanent", "label": "Permanent" },
+  "employer": {
+    "name": "Northstar Example Works AB",
+    "workplace": "Northstar Product Studio"
+  },
+  "workplace_address": {
+    "city": "Stockholm",
+    "municipality": "Stockholm",
+    "region": "Stockholms län",
+    "country": "Sweden"
+  },
+  "publication_date": "2026-08-25T08:15:00+00:00",
+  "removed": false,
+  "remote_work": true,
+  "source_type": "FIXTURE"
+}

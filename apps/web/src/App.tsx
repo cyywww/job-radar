@@ -1,10 +1,11 @@
 import { useState } from 'react';
 
+import { JobsWorkspace } from './features/jobs/JobsWorkspace.js';
 import { ProfileWorkspace } from './features/profile/ProfileWorkspace.js';
 import { SystemPanel } from './features/system/SystemPanel.js';
 
 export default function App(): React.JSX.Element {
-  const [view, setView] = useState<'profile' | 'system'>('profile');
+  const [view, setView] = useState<'profile' | 'jobs' | 'system'>('profile');
 
   return (
     <>
@@ -28,6 +29,13 @@ export default function App(): React.JSX.Element {
             Profile
           </button>
           <button
+            className={view === 'jobs' ? 'nav-button nav-button--active' : 'nav-button'}
+            type="button"
+            onClick={() => setView('jobs')}
+          >
+            Jobs
+          </button>
+          <button
             className={view === 'system' ? 'nav-button nav-button--active' : 'nav-button'}
             type="button"
             onClick={() => setView('system')}
@@ -35,9 +43,17 @@ export default function App(): React.JSX.Element {
             System
           </button>
         </nav>
-        <span className="phase-label">Profile · M1</span>
+        <span className="phase-label">JobTech loop · M2</span>
       </header>
-      <main>{view === 'profile' ? <ProfileWorkspace /> : <SystemPanel />}</main>
+      <main>
+        {view === 'profile' ? (
+          <ProfileWorkspace />
+        ) : view === 'jobs' ? (
+          <JobsWorkspace />
+        ) : (
+          <SystemPanel />
+        )}
+      </main>
       <footer>
         <span>Job Radar · local-first candidate data</span>
         <span>Bound to this Mac</span>

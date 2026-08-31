@@ -15,6 +15,13 @@
       "when": 1787658407424,
       "tag": "0001_dusty_praxagora",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "6",
+      "when": 1788186936888,
+      "tag": "0002_lush_proemial_gods",
+      "breakpoints": true
     }
   ]
 }

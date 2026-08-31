@@ -1,0 +1,21 @@
+{
+  "id": "fictional-job-102",
+  "webpage_url": "https://arbetsformedlingen.se/platsbanken/annonser/fictional-job-102",
+  "headline": "Frontend Developer",
+  "application_deadline": "2026-11-30",
+  "description": {
+    "text": "Example Harbour Systems is looking for a frontend developer. Build robust design systems with React and TypeScript. We work hybrid, with two fictional office days each week.",
+    "text_formatted": "<p>Example Harbour Systems is looking for a frontend developer.</p><p>Build robust design systems with React and TypeScript. We work hybrid, with two fictional office days each week.</p>"
+  },
+  "employment_type": { "label": "Permanent" },
+  "employer": { "name": "Example Harbour Systems AB" },
+  "workplace_address": {
+    "city": "Solna",
+    "municipality": "Solna",
+    "region": "Stockholms län",
+    "country": "Sweden"
+  },
+  "publication_date": "2026-08-24T10:00:00Z",
+  "removed": false,
+  "source_type": "FIXTURE"
+}

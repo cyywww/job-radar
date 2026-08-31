@@ -10,16 +10,20 @@ import Fastify, {
 import { ZodError } from 'zod';
 
 import type { AppConfig } from '@job-radar/config';
+import type { JobConnector } from '@job-radar/connectors';
 import type { DatabaseClient } from '@job-radar/db';
 import { AppError, errorResponseSchema } from '@job-radar/shared';
 
 import { registerHealthRoutes } from './routes/health.js';
+import { registerJobRoutes } from './routes/jobs.js';
 import { registerProfileRoutes } from './routes/profile.js';
+import { ScanCoordinator } from './services/scan-coordinator.js';
 
 export interface BuildAppOptions {
   readonly config: AppConfig;
   readonly database: DatabaseClient;
   readonly logger?: FastifyBaseLogger | false;
+  readonly connectors?: readonly JobConnector[];
 }
 
 function statusAndCode(error: unknown): { statusCode: number; code: string } {
@@ -98,6 +102,10 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
 
   await registerHealthRoutes(app, options.database);
   await registerProfileRoutes(app, options.database);
+  const coordinator = new ScanCoordinator(options.database, app.log, {
+    ...(options.connectors ? { connectors: options.connectors } : {}),
+  });
+  await registerJobRoutes(app, options.database, coordinator);
 
   const indexPath = join(options.config.webDistDir, 'index.html');
   const assetsPath = join(options.config.webDistDir, 'assets');
@@ -115,6 +123,7 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
   }
 
   app.addHook('onClose', async () => {
+    await coordinator.close();
     options.database.close();
   });
 

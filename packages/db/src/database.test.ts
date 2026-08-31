@@ -33,13 +33,24 @@ describe('database infrastructure', () => {
       .get() as { name: string } | undefined;
 
     expect(table?.name).toBe('system_metadata');
-    const profileTable = database.sqlite
+    const expectedTables = [
+      'profile_versions',
+      'sources',
+      'scan_runs',
+      'source_runs',
+      'jobs',
+      'job_sources',
+      'job_snapshots',
+    ];
+    const tables = database.sqlite
       .prepare(
-        "select name from sqlite_master where type = 'table' and name = 'profile_versions'",
+        `select name from sqlite_master where type = 'table' and name in (${expectedTables.map(() => '?').join(', ')})`,
       )
-      .get() as { name: string } | undefined;
+      .all(...expectedTables) as Array<{ name: string }>;
 
-    expect(profileTable?.name).toBe('profile_versions');
+    expect(tables.map(({ name }) => name).sort()).toEqual(expectedTables.sort());
+    expect(database.sqlite.pragma('integrity_check', { simple: true })).toBe('ok');
+    expect(database.sqlite.pragma('foreign_key_check')).toEqual([]);
     expect(checkDatabase(database).status).toBe('ok');
   });
 });

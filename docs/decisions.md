@@ -99,3 +99,43 @@ validated preference contract; it does not inspect jobs or score them. A preview
 be ready while preferences are pending, required search inputs are missing, or work
 authorization is unknown. This keeps the M1 browser preview and the future M2 search
 boundary consistent without duplicating policy code.
+
+## ADR-015: connectors are transport adapters with one normalized boundary
+
+`@job-radar/connectors` owns source HTTP behavior and parsing. A connector health-checks,
+discovers summaries, fetches complete details, and returns `NormalizedJob`; it never reads
+Profile tables or writes SQLite. The API scan coordinator supplies confirmed-role queries,
+cancellation, and retry accounting, while `JobRepository` owns identity and persistence.
+This keeps later ATS adapters reusable without copying orchestration or privacy policy.
+
+## ADR-016: complete raw details back immutable, content-addressed snapshots
+
+Every successful detail normalization includes the complete parsed source response. The
+repository stable-sorts and SHA-256 hashes that response, stores it locally in
+`job_snapshots.raw_json`, and appends only when the hash is new for the job. Normal APIs do
+not expose the raw object. This balances source auditability, full-JD retention, and repeat
+scan idempotency without putting descriptions in logs.
+
+## ADR-017: disappearance requires a complete discovery set
+
+A connector explicitly reports whether pagination exhausted every configured query.
+Only a complete result set can increment source-link misses; the third consecutive miss
+closes the link. Failed, cancelled, or page-capped scans cannot close jobs by absence.
+Deadlines and explicit upstream removal remain immediate closure signals. This prevents a
+rate limit or result cap from silently turning active jobs into false closures.
+
+## ADR-018: scans run in-process but persist every state transition
+
+M2 uses one process-local coordinator and one active scan rather than introducing the M5
+scheduler/queue infrastructure early. POST returns a durable queued run, background work
+updates SQLite, and graceful Fastify shutdown aborts and awaits it before closing the
+database. Connector and per-detail errors become terminal run data rather than unhandled
+process errors.
+
+## ADR-019: the first JobTech query uses confirmed roles only
+
+JobTech free-text searches are built only from confirmed target roles. Locations are not
+concatenated into free text because that would produce unstable relevance and is not a
+substitute for JobTech Taxonomy geographic IDs. Structured location mapping is deferred;
+the stored job location and complete confirmed preferences remain available for that
+adapter improvement and later deterministic Gates.

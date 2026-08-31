@@ -1,26 +1,25 @@
 # Testing and verification
 
-## Test layers in M1
+## Test layers in M2
 
-- Shared contract tests cover dates, complete salary triples, evidence references, and
-  confirmed-only completeness. Shared preference-preview tests cover deterministic search
-  terms, hard gates, pending status, and unknown work authorization.
-- Configuration tests cover safe loopback/path defaults and environment validation.
-- Database integration tests migrate an empty temporary SQLite database, exercise Profile
-  version creation/history/conflict handling, and prove pending facts are absent from the
-  confirmed-only view.
-- API integration tests use Fastify injection and a migrated temporary database for
-  health, Profile CRUD/versioning/confirmation, preferences, deterministic imports, Zod
-  errors, path traversal rejection, MIME restrictions, and upload size limits.
-- Import privacy tests prove unlabeled raw source markers are not returned or persisted in
-  the draft contract.
-- React tests validate health parsing and run a jsdom browser integration flow that
-  creates a Profile, enters job preferences and exclusions, edits the Profile, and sees a
-  second immutable version plus the live search-lane/Gate preview.
-- Manual in-app browser acceptance uses only fictional values and a disposable database.
+- Shared contract tests cover Profile/preferences plus bounded source configuration,
+  required complete descriptions/raw data, and enumerated scan states.
+- Configuration tests retain safe loopback/path defaults and environment validation.
+- Connector fixture tests use fictional JobTech list/detail JSON only. They cover
+  pagination, full-detail normalization, canonical URLs, 429 retry accounting with
+  exponential-delay hooks, request timeout, rate pacing, concurrency caps, and in-flight
+  cancellation.
+- Database tests migrate an empty temporary SQLite database, verify all M0–M2 tables,
+  run integrity and foreign-key checks, and retain Profile version tests.
+- API integration tests use a migrated temporary database and the real JobTech connector
+  against an injected fixture transport. They prove full-detail storage, repeat-scan
+  idempotency, changed snapshots, three-complete-scan closure, failure isolation, retry
+  counts, cancellation, health continuity, and list/detail responses.
+- React tests retain Profile onboarding/version coverage and add the Jobs list/detail plus
+  browser-initiated scan flow. Complete upstream HTML is never rendered in tests or code.
 
-All tests use temporary directories or fictional/system-only values. No test reads the
-normal local database, a real Profile, resume, secret, or personal file.
+All default tests use temporary directories or fictional/system-only values. No default
+test reads the normal local database, a real Profile/resume, a secret, or the network.
 
 ## Commands
 
@@ -38,15 +37,19 @@ non-mutating check.
 
 ## Empty-database migration check
 
-Use a newly created disposable directory rather than a broad `/tmp` target:
+Use a newly created disposable directory rather than a broad target:
 
 ```bash
-JOB_RADAR_DATABASE_PATH=/tmp/job-radar-migration-check/example.sqlite pnpm db:migrate
+JOB_RADAR_DATABASE_PATH=/tmp/job-radar-m2-migration/example.sqlite pnpm db:migrate
 ```
 
-The database test performs the same check automatically. A successful M1 migration
-creates `profiles`, `profile_versions`, `profile_evidence_sources`, `profile_facts`, and
-`profile_preferences` in addition to the M0 metadata and migration tables.
+A successful M2 migration creates `sources`, `scan_runs`, `source_runs`, `jobs`,
+`job_sources`, and `job_snapshots` in addition to the M0/M1 tables. Verify both:
+
+```sql
+PRAGMA integrity_check;
+PRAGMA foreign_key_check;
+```
 
 ## Runtime checks
 
@@ -55,7 +58,7 @@ Development:
 ```bash
 pnpm dev
 curl --fail http://127.0.0.1:8787/api/health
-curl --fail http://127.0.0.1:8787/api/readiness
+curl --fail http://127.0.0.1:8787/api/sources
 curl --fail http://127.0.0.1:5173/
 ```
 
@@ -66,35 +69,43 @@ pnpm build
 pnpm start
 curl --fail http://127.0.0.1:8787/
 curl --fail http://127.0.0.1:8787/api/health
+curl --fail http://127.0.0.1:8787/api/jobs
 ```
 
-For manual Profile acceptance, use an isolated `JOB_RADAR_DATABASE_PATH`; verify pending
-import, creation, explicit confirmation, manual edits, preference exclusions, version
-history, completeness, and the System health tab. Do not use a real resume or Profile.
+Starting a real scan requires a local Profile with at least one confirmed target role.
+Use a disposable database and fictional Profile for acceptance unless the user explicitly
+wants their normal local state. POST the scan, then poll its ID until a terminal status.
 
-## Latest result
+## Latest deterministic result
 
 Verified on 2026-08-31 with Node 22.16.0 and pnpm 11.19.0:
 
-- Frozen-lockfile installation passed; the peer dependency check found no issues.
-- ESLint, Prettier, and all workspace TypeScript checks passed.
-- 36 Vitest tests across 12 files passed: 8 shared, 3 config, 5 database, 17 API,
-  and 3 web tests.
-- Package TypeScript builds, Vite production build, and Fastify `tsup` bundle passed.
-- A disposable empty database applied 2 migrations, exposed all expected tables and
-  indexes, and returned no foreign-key violations.
-- The jsdom browser-flow test created versions 1 and 2, set a hard exclusion, and rendered
-  one deterministic search lane without using personal data.
-- `pnpm dev` started Vite and Fastify together after migration; the browser entry,
-  health, and readiness endpoints returned HTTP 200 with API and SQLite status `ok`.
-- Production-style `pnpm start` served the built page and returned HTTP 200 from health
-  and readiness with database status `ok`.
-- Privacy tests verified that an unlabeled raw-source marker is neither returned nor
-  persisted by the import substitute.
+- 52 Vitest tests across 16 files passed: 11 shared, 3 config, 7 connector, 5 database,
+  22 API, and 4 web tests.
+- A fixture scan stored three jobs with full descriptions and raw responses. An identical
+  scan produced three unchanged results with no new rows; a changed detail added exactly
+  one snapshot.
+- Three complete empty discoveries closed the fixture jobs. Failure and cancellation
+  produced durable terminal run states without making `/api/health` unavailable.
+- `pnpm check` and `pnpm format:check` passed. A new database applied all migrations and
+  passed integrity/foreign-key checks. Both development and production-style loopback
+  servers returned HTTP 200 for their page and relevant API health/data routes.
+- In-app browser acceptance verified Jobs navigation, the run strip, list/detail empty
+  states, the missing-confirmed-role error, and an empty warning/error console.
+- The opt-in live JobTech smoke succeeded with one discovered/fetched/created real-source
+  job, zero retries/failures, and a stored 2,924-character complete description/raw
+  snapshot. The deliberate one-page/one-result cap yielded `resultSetComplete=false`, as
+  required for safe lifecycle handling. Its disposable database was removed.
+
+## Live JobTech smoke policy
+
+Live smoke is optional and must never be part of `pnpm test`. If network access is
+available, use a disposable database/Profile, start one scan through the API, and record
+the real run ID/counts. If DNS or egress is unavailable, record the exact connectivity
+failure; do not replace it with a fixture result or call fixture data “live.”
 
 ## Deferred tests
 
-Connector contract fixtures and lifecycle/idempotency tests begin in M2. Scoring evals
-belong to M3. A standalone Playwright suite, recovery drills, CSP/security hardening, and
-release automation remain M7 work; M1 has an automated Testing Library browser-flow test
-plus manual in-app browser acceptance.
+Additional ATS fixture suites, cross-source fuzzy matching, scoring evals, a standalone
+Playwright suite, crash recovery, large-volume performance, CSP/security hardening, and
+release automation remain in their owning later phases.

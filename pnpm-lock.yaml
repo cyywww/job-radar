@@ -52,6 +52,9 @@ importers:
       '@job-radar/config':
         specifier: workspace:*
         version: link:../../packages/config
+      '@job-radar/connectors':
+        specifier: workspace:*
+        version: link:../../packages/connectors
       '@job-radar/db':
         specifier: workspace:*
         version: link:../../packages/db
@@ -132,6 +135,19 @@ importers:
       pino:
         specifier: ^10.3.1
         version: 10.3.1
+      zod:
+        specifier: ^4.4.3
+        version: 4.4.3
+    devDependencies:
+      '@job-radar/testing':
+        specifier: workspace:*
+        version: link:../testing
+
+  packages/connectors:
+    dependencies:
+      '@job-radar/shared':
+        specifier: workspace:*
+        version: link:../shared
       zod:
         specifier: ^4.4.3
         version: 4.4.3

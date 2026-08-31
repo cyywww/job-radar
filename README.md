@@ -1,13 +1,12 @@
 # Job Radar
 
-Job Radar is a local-first job-search workspace. The current milestone is M1: an
-evidence-backed candidate Profile, job preferences, immutable version history, and a
-browser onboarding/editor flow on top of the React, Fastify, Zod, SQLite, and Drizzle
-foundation.
+Job Radar is a local-first job-search workspace. The current milestone is M2: an
+evidence-backed candidate Profile plus a first complete JobTech collection loop across
+search, full-detail normalization, SQLite history, API queries, and browser review.
 
-No real profile, resume, credentials, job-source connector, AI scoring, or application
-tracking data is included in this repository. Tests and examples use fictional people
-and organizations.
+No real profile, resume, credentials, captured job data, AI scoring, or application
+tracking data is included in this repository. Tests and examples use fictional people,
+organizations, and JobTech responses.
 
 ## Requirements
 
@@ -40,10 +39,9 @@ or for Codex CLI to run from the repository root:
 - API: `http://127.0.0.1:8787`
 - Health: `http://127.0.0.1:8787/api/health`
 
-Open the web URL to create or edit the local Profile, set hard job-search constraints,
-review evidence status, preview deterministic search lanes and Gates, confirm pending
-imports, and inspect version history. The System tab retains the API and database health
-view.
+Open the web URL to create or edit the local Profile, confirm at least one target role,
+then use Jobs to start a JobTech scan and inspect run status, normalized metadata, and the
+complete locally stored description. The System tab retains API/database health.
 
 Stop both processes with `Ctrl+C`. Use `pnpm dev:api` or `pnpm dev:web` to run only one
 side during focused development.
@@ -92,6 +90,23 @@ Profile API contracts are exported from `@job-radar/shared`. Primary routes are:
 - `POST /api/preferences/preview`
 - `POST /api/profile/import` and `POST /api/profile/import/file`
 
+## JobTech collection
+
+The first source is the official JobTech JobSearch API. A scan uses confirmed target roles
+only, paginates search results, fetches `/ad/{id}` for every complete description, and
+stores an auditable immutable snapshot. The default connector has bounded retries,
+timeouts, rate and concurrency limits, plus cancellation.
+
+Primary M2 routes are:
+
+- `GET /api/sources`
+- `POST /api/scans`, `GET /api/scans`, and `GET /api/scans/:id`
+- `POST /api/scans/:id/cancel`
+- `GET /api/jobs` and `GET /api/jobs/:id`
+
+Default tests use fixed fictional JSON and never require JobTech network access. See
+`docs/connectors.md` for lifecycle safety and the interface new ATS connectors must use.
+
 ## Quality checks
 
 ```bash
@@ -103,8 +118,8 @@ pnpm build
 ```
 
 Run the complete project gate with `pnpm check`. Tests use temporary SQLite databases
-and contain only fictional/system data. The web suite includes a jsdom integration test
-for profile creation, preferences, editing, and version history.
+and contain only fictional/system data. The web suite covers both Profile versioning and
+the Jobs list/detail plus scan trigger.
 
 ## Production-style local run
 
