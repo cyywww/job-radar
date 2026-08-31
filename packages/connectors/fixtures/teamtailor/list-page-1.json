@@ -1,0 +1,16 @@
+{
+  "data": [
+    {
+      "id": "tt-fictional-8101",
+      "type": "jobs",
+      "attributes": {
+        "title": "Fictional Platform Engineer",
+        "status": "published",
+        "careersite-job-url": "https://careers.northstar.example/jobs/8101-platform-engineer"
+      }
+    }
+  ],
+  "links": {
+    "next": "https://api.teamtailor.com/v1/jobs?page[number]=2"
+  }
+}

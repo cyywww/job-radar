@@ -41,7 +41,8 @@ function response(body: unknown, status = 200): Response {
   });
 }
 
-type GatewayMode = 'success' | 'changed' | 'partial' | 'empty' | 'failure' | 'hanging';
+type GatewayMode =
+  'success' | 'changed' | 'partial' | 'partial_missing' | 'empty' | 'failure' | 'hanging';
 
 let app: FastifyInstance;
 let database: DatabaseClient;
@@ -85,6 +86,12 @@ beforeEach(async () => {
       if (url.searchParams.get('limit') === '1') {
         return response({ total: { value: 1 }, hits: [{ id: 'fictional-job-101' }] });
       }
+      if (mode === 'partial_missing') {
+        return response({
+          total: { value: 2 },
+          hits: [{ id: 'fictional-job-101' }, { id: 'fictional-job-102' }],
+        });
+      }
       return response(
         fixture(
           url.searchParams.get('offset') === '2'
@@ -94,7 +101,7 @@ beforeEach(async () => {
       );
     }
     const id = url.pathname.split('/').at(-1)?.replace('fictional-job-', '');
-    if (mode === 'partial' && id === '102') {
+    if ((mode === 'partial' || mode === 'partial_missing') && id === '102') {
       return response({ error: 'fixture detail outage' }, 503);
     }
     const detail = fixture(`detail-${id}.json`) as Record<string, unknown>;
@@ -220,6 +227,32 @@ describe('job scan API', () => {
     expect(threshold.counts.closed).toBe(3);
     expect(active.total).toBe(0);
     expect(all.jobs.every((job) => !job.active && job.closedAt !== null)).toBe(true);
+
+    mode = 'success';
+    await startScan();
+    const reopened = jobsResponseSchema.parse(
+      (await app.inject({ method: 'GET', url: '/api/jobs' })).json(),
+    );
+    expect(reopened.total).toBe(3);
+    expect(reopened.jobs.every((job) => job.lifecycleStatus === 'open')).toBe(true);
+  });
+
+  it('reprocesses captured jobs without changing immutable snapshot history', async () => {
+    await startScan();
+    const before = database.sqlite
+      .prepare('select count(*) as count from job_snapshots')
+      .get() as { count: number };
+    const response = await app.inject({ method: 'POST', url: '/api/jobs/reprocess' });
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toMatchObject({
+      processed: 3,
+      merged: 0,
+      snapshotsPreserved: before.count,
+    });
+    const after = database.sqlite
+      .prepare('select count(*) as count from job_snapshots')
+      .get() as { count: number };
+    expect(after.count).toBe(before.count);
   });
 
   it('isolates connector failure, records retries, and keeps the API healthy', async () => {
@@ -256,6 +289,28 @@ describe('job scan API', () => {
       errorSummary: '1 discovered job detail failed',
     });
     expect(jobList.total).toBe(2);
+  });
+
+  it('does not advance missing lifecycle during a detail-partial source run', async () => {
+    await startScan();
+    mode = 'partial_missing';
+    const run = await startScan();
+    const missingLink = database.sqlite
+      .prepare(
+        'select consecutive_misses as consecutiveMisses, active from job_sources where source_job_id = ?',
+      )
+      .get('fictional-job-103') as { consecutiveMisses: number; active: number };
+    const all = jobsResponseSchema.parse(
+      (await app.inject({ method: 'GET', url: '/api/jobs?active=all' })).json(),
+    );
+
+    expect(run.sourceRuns[0]).toMatchObject({
+      status: 'partial',
+      resultSetComplete: true,
+    });
+    expect(missingLink).toEqual({ consecutiveMisses: 0, active: 1 });
+    expect(all.jobs).toHaveLength(3);
+    expect(all.jobs.every((job) => job.lifecycleStatus === 'open')).toBe(true);
   });
 
   it('cancels an in-flight connector request', async () => {

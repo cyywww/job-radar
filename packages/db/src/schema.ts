@@ -133,6 +133,7 @@ export const sources = sqliteTable(
     baseUrl: text('base_url').notNull(),
     enabled: integer('enabled', { mode: 'boolean' }).notNull(),
     config: text('config_json', { mode: 'json' }).$type<SourceConfig>().notNull(),
+    configVersion: integer('config_version').notNull().default(1),
     lastSuccessAt: integer('last_success_at', { mode: 'timestamp_ms' }),
     lastError: text('last_error'),
     lastErrorCategory: text('last_error_category').$type<SourceErrorCategory>(),
@@ -158,6 +159,7 @@ export const scanRuns = sqliteTable(
     status: text('status', {
       enum: ['queued', 'running', 'succeeded', 'partial', 'failed', 'cancelled'],
     }).notNull(),
+    dedupeKey: text('dedupe_key'),
     profileVersion: integer('profile_version').notNull(),
     discoveredCount: integer('discovered_count').notNull().default(0),
     fetchedCount: integer('fetched_count').notNull().default(0),
@@ -175,6 +177,9 @@ export const scanRuns = sqliteTable(
   (table) => [
     index('scan_runs_created_idx').on(table.createdAt),
     index('scan_runs_status_idx').on(table.status),
+    uniqueIndex('scan_runs_active_dedupe_uq')
+      .on(table.dedupeKey)
+      .where(sql`${table.status} in ('queued', 'running')`),
     check('scan_runs_profile_version_positive', sql`${table.profileVersion} > 0`),
   ],
 );
@@ -192,6 +197,7 @@ export const sourceRuns = sqliteTable(
     status: text('status', {
       enum: ['queued', 'running', 'succeeded', 'partial', 'failed', 'cancelled'],
     }).notNull(),
+    configVersion: integer('config_version').notNull().default(1),
     queries: text('queries_json', { mode: 'json' }).$type<string[]>().notNull(),
     resultSetComplete: integer('result_set_complete', { mode: 'boolean' }),
     pagesFetched: integer('pages_fetched').notNull().default(0),
@@ -232,6 +238,11 @@ export const jobs = sqliteTable(
     deadline: integer('deadline', { mode: 'timestamp_ms' }),
     firstSeenAt: integer('first_seen_at', { mode: 'timestamp_ms' }).notNull(),
     lastSeenAt: integer('last_seen_at', { mode: 'timestamp_ms' }).notNull(),
+    lastChangedAt: integer('last_changed_at', { mode: 'timestamp_ms' }).notNull(),
+    contentFingerprint: text('content_fingerprint').notNull(),
+    canonicalSourceId: text('canonical_source_id').references(() => sources.id, {
+      onDelete: 'restrict',
+    }),
     active: integer('active', { mode: 'boolean' }).notNull(),
     closedAt: integer('closed_at', { mode: 'timestamp_ms' }),
     canonicalUrl: text('canonical_url').notNull(),
@@ -263,6 +274,20 @@ export const jobSources = sqliteTable(
       .references(() => scanRuns.id, { onDelete: 'restrict' }),
     consecutiveMisses: integer('consecutive_misses').notNull().default(0),
     active: integer('active', { mode: 'boolean' }).notNull(),
+    lastChangedAt: integer('last_changed_at', { mode: 'timestamp_ms' }).notNull(),
+    matchStrategy: text('match_strategy', {
+      enum: [
+        'new_job',
+        'source_external_id',
+        'canonical_url',
+        'content_fingerprint',
+        'company_title_location_published',
+        'reprocessed',
+      ],
+    }).notNull(),
+    matchEvidence: text('match_evidence_json', { mode: 'json' })
+      .$type<Record<string, unknown>>()
+      .notNull(),
     sourceMetadata: text('source_metadata_json', { mode: 'json' })
       .$type<Record<string, unknown>>()
       .notNull()
@@ -284,15 +309,61 @@ export const jobSnapshots = sqliteTable(
       .notNull()
       .references(() => jobs.id, { onDelete: 'cascade' }),
     contentHash: text('content_hash').notNull(),
+    company: text('company').notNull(),
+    title: text('title').notNull(),
+    location: text('location').notNull(),
+    deadline: integer('deadline', { mode: 'timestamp_ms' }),
     descriptionText: text('description_text').notNull(),
     descriptionHtml: text('description_html'),
     rawJson: text('raw_json', { mode: 'json' })
       .$type<Record<string, unknown>>()
       .notNull(),
+    sourceId: text('source_id').references(() => sources.id, {
+      onDelete: 'restrict',
+    }),
+    scanRunId: text('scan_run_id').references(() => scanRuns.id, {
+      onDelete: 'restrict',
+    }),
+    changedFields: text('changed_fields_json', { mode: 'json' })
+      .$type<
+        Array<'initial' | 'description' | 'location' | 'deadline' | 'title' | 'company'>
+      >()
+      .notNull()
+      .default(sql`'[]'`),
     fetchedAt: integer('fetched_at', { mode: 'timestamp_ms' }).notNull(),
   },
   (table) => [
-    uniqueIndex('job_snapshots_job_hash_uq').on(table.jobId, table.contentHash),
+    uniqueIndex('job_snapshots_job_source_hash_uq').on(
+      table.jobId,
+      table.sourceId,
+      table.contentHash,
+    ),
     index('job_snapshots_job_fetched_idx').on(table.jobId, table.fetchedAt),
+    index('job_snapshots_source_fetched_idx').on(table.sourceId, table.fetchedAt),
+  ],
+);
+
+export const jobMergeEvents = sqliteTable(
+  'job_merge_events',
+  {
+    id: text('id').primaryKey(),
+    jobId: text('job_id')
+      .notNull()
+      .references(() => jobs.id, { onDelete: 'cascade' }),
+    absorbedJobId: text('absorbed_job_id'),
+    sourceId: text('source_id').references(() => sources.id, { onDelete: 'restrict' }),
+    sourceJobId: text('source_job_id'),
+    scanRunId: text('scan_run_id').references(() => scanRuns.id, {
+      onDelete: 'restrict',
+    }),
+    matchStrategy: text('match_strategy').notNull(),
+    evidence: text('evidence_json', { mode: 'json' })
+      .$type<Record<string, unknown>>()
+      .notNull(),
+    createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull(),
+  },
+  (table) => [
+    index('job_merge_events_job_created_idx').on(table.jobId, table.createdAt),
+    index('job_merge_events_source_idx').on(table.sourceId),
   ],
 );

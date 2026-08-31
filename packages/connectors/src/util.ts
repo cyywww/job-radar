@@ -1,3 +1,5 @@
+import { canonicalizeJobUrl } from '@job-radar/shared';
+
 import { ConnectorCancelledError } from './contracts.js';
 
 export async function abortableDelay(ms: number, signal: AbortSignal): Promise<void> {
@@ -18,15 +20,7 @@ export async function abortableDelay(ms: number, signal: AbortSignal): Promise<v
 }
 
 export function canonicalizeUrl(value: string): string {
-  const url = new URL(value);
-  url.hash = '';
-  url.hostname = url.hostname.toLowerCase();
-  for (const key of [...url.searchParams.keys()]) {
-    if (/^(utm_.+|fbclid|gclid)$/i.test(key)) url.searchParams.delete(key);
-  }
-  url.searchParams.sort();
-  if (url.pathname.length > 1) url.pathname = url.pathname.replace(/\/+$/, '');
-  return url.toString();
+  return canonicalizeJobUrl(value);
 }
 
 const namedEntities: Record<string, string> = {

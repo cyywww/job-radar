@@ -7,6 +7,7 @@ import {
   greenhouseSourceConfigSchema,
   leverSourceConfigSchema,
   sourceSchema,
+  teamtailorSourceConfigSchema,
   type Source,
 } from '@job-radar/shared';
 
@@ -15,11 +16,13 @@ import { type ConnectorContext, ConnectorRequestError } from './contracts.js';
 import { exerciseConnectorContract } from './contract-test-kit.js';
 import { GreenhouseConnector } from './greenhouse.js';
 import { LeverConnector } from './lever.js';
+import { TeamtailorConnector } from './teamtailor.js';
 
 const fixtureRoots = {
   greenhouse: new URL('../fixtures/greenhouse/', import.meta.url),
   lever: new URL('../fixtures/lever/', import.meta.url),
   ashby: new URL('../fixtures/ashby/', import.meta.url),
+  teamtailor: new URL('../fixtures/teamtailor/', import.meta.url),
 };
 const timestamp = '2026-08-31T08:00:00.000Z';
 const commonPolicy = {
@@ -47,7 +50,10 @@ function response(
   });
 }
 
-function source(type: 'greenhouse' | 'lever' | 'ashby', maxRetries = 1): Source {
+function source(
+  type: 'greenhouse' | 'lever' | 'ashby' | 'teamtailor',
+  maxRetries = 1,
+): Source {
   const details =
     type === 'greenhouse'
       ? {
@@ -78,23 +84,42 @@ function source(type: 'greenhouse' | 'lever' | 'ashby', maxRetries = 1): Source 
               maxRetries,
             }),
           }
-        : {
-            id: '73000000-0000-4000-8000-000000000001',
-            name: 'Ashby fixture',
-            baseUrl: 'https://api.ashbyhq.com',
-            config: ashbySourceConfigSchema.parse({
-              kind: 'ashby',
-              boardName: 'polaris-example',
-              companyName: 'Polaris Ashby Example AB',
-              includeCompensation: true,
-              ...commonPolicy,
-              maxRetries,
-            }),
-          };
+        : type === 'ashby'
+          ? {
+              id: '73000000-0000-4000-8000-000000000001',
+              name: 'Ashby fixture',
+              baseUrl: 'https://api.ashbyhq.com',
+              config: ashbySourceConfigSchema.parse({
+                kind: 'ashby',
+                boardName: 'polaris-example',
+                companyName: 'Polaris Ashby Example AB',
+                includeCompensation: true,
+                ...commonPolicy,
+                maxRetries,
+              }),
+            }
+          : {
+              id: '74000000-0000-4000-8000-000000000001',
+              name: 'Teamtailor fixture',
+              baseUrl: 'https://api.teamtailor.com',
+              config: teamtailorSourceConfigSchema.parse({
+                kind: 'teamtailor',
+                companyName: 'Northstar Teamtailor Example AB',
+                region: 'eu',
+                apiTokenEnv: 'JOB_RADAR_TEAMTAILOR_TEST_TOKEN',
+                pageSize: 1,
+                maxPages: 3,
+                ...commonPolicy,
+                maxRetries,
+              }),
+            };
 
   return sourceSchema.parse({
     type,
     enabled: true,
+    supportLevel: type === 'teamtailor' ? 'limited' : 'supported',
+    supportReason: 'Fixture support classification.',
+    configVersion: 1,
     lastSuccessAt: null,
     lastError: null,
     lastErrorCategory: null,
@@ -263,5 +288,56 @@ describe('AshbyConnector', () => {
         statusCode: 429,
       }),
     );
+  });
+});
+
+describe('TeamtailorConnector', () => {
+  it('passes the reusable contract with authenticated official pagination', async () => {
+    const fetchMock = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+      const url = new URL(input.toString());
+      expect(new Headers(init?.headers).get('authorization')).toBe(
+        'Token token=fixture-public-read-token',
+      );
+      const last = url.pathname.split('/').at(-1);
+      if (last?.startsWith('tt-fictional-')) {
+        return response(fixture('teamtailor', `detail-${last.slice(-4)}.json`));
+      }
+      return response(
+        fixture(
+          'teamtailor',
+          url.searchParams.get('page[number]') === '2'
+            ? 'list-page-2.json'
+            : 'list-page-1.json',
+        ),
+      );
+    });
+    const connector = new TeamtailorConnector({
+      fetch: fetchMock,
+      readEnvironment: () => 'fixture-public-read-token',
+    });
+    const result = await exerciseConnectorContract(
+      connector,
+      context(source('teamtailor')),
+    );
+
+    expect(result.discovery).toMatchObject({ pagesFetched: 2, complete: true });
+    expect(result.normalized).toHaveLength(2);
+    expect(result.normalized[0]).toMatchObject({
+      externalId: 'tt-fictional-8101',
+      location: 'Stockholm, Sweden',
+      remoteMode: 'hybrid',
+    });
+  });
+
+  it('fails safely when the environment variable is absent', async () => {
+    const connector = new TeamtailorConnector({
+      fetch: vi.fn(),
+      readEnvironment: () => undefined,
+    });
+    await expect(
+      connector.healthCheck(context(source('teamtailor'))),
+    ).rejects.toMatchObject({
+      category: 'configuration',
+    });
   });
 });

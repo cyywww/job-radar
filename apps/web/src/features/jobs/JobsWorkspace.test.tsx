@@ -21,7 +21,9 @@ const job: JobSummary = {
   deadline: '2026-12-15T23:59:59.999Z',
   firstSeenAt: timestamp,
   lastSeenAt: timestamp,
+  lastChangedAt: timestamp,
   active: true,
+  lifecycleStatus: 'open',
   closedAt: null,
   canonicalUrl: 'https://arbetsformedlingen.se/platsbanken/annonser/fictional-job-101',
   currentSnapshotId: snapshotId,
@@ -34,18 +36,29 @@ const detail: JobDetail = {
     {
       sourceId: '70000000-0000-4000-8000-000000000001',
       sourceName: 'JobTech / Platsbanken',
+      sourceType: 'jobtech',
       sourceJobId: 'fictional-job-101',
       sourceUrl: job.canonicalUrl,
       firstSeenAt: timestamp,
       lastSeenAt: timestamp,
       consecutiveMisses: 0,
       active: true,
+      lastChangedAt: timestamp,
+      matchStrategy: 'new_job',
+      matchExplanation: 'Created from the first source.',
       sourceMetadataStored: true,
     },
   ],
   snapshot: {
     id: snapshotId,
+    sourceId: '70000000-0000-4000-8000-000000000001',
+    sourceName: 'JobTech / Platsbanken',
     contentHash: 'a'.repeat(64),
+    company: job.company,
+    title: job.title,
+    location: job.location,
+    deadline: job.deadline,
+    changedFields: ['initial'],
     descriptionText:
       'Complete fictional description with React, TypeScript, accessible products, and a local-first workflow.',
     descriptionHtml: null,
@@ -55,7 +68,14 @@ const detail: JobDetail = {
   history: [
     {
       id: snapshotId,
+      sourceId: '70000000-0000-4000-8000-000000000001',
+      sourceName: 'JobTech / Platsbanken',
       contentHash: 'a'.repeat(64),
+      company: job.company,
+      title: job.title,
+      location: job.location,
+      deadline: job.deadline,
+      changedFields: ['initial'],
       fetchedAt: timestamp,
       rawResponseStored: true,
     },
@@ -68,6 +88,9 @@ const source: SourceView = {
   name: 'JobTech / Platsbanken',
   baseUrl: 'https://jobsearch.api.jobtechdev.se',
   enabled: true,
+  supportLevel: 'supported',
+  supportReason: 'Official public fixture.',
+  configVersion: 1,
   config: {
     kind: 'jobtech',
     queryMode: 'confirmed_profile_roles',
@@ -127,6 +150,7 @@ const queuedRun: ScanRun = {
       scanRunId: '83000000-0000-4000-8000-000000000001',
       sourceId: source.id,
       sourceName: source.name,
+      configVersion: 1,
       status: 'queued',
       queries: ['Product Engineer'],
       resultSetComplete: null,
@@ -167,7 +191,7 @@ describe('JobsWorkspace', () => {
     const fetchMock = vi.fn(
       async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
         const path = input.toString();
-        if (path === '/api/jobs')
+        if (path === '/api/jobs?active=all')
           return response({ jobs: [job], total: 1, limit: 50, offset: 0 });
         if (path === `/api/jobs/${jobId}`) return response(detail);
         if (path === '/api/sources') return response({ sources: [source] });

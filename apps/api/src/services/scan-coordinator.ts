@@ -6,8 +6,10 @@ import {
   ConnectorCancelledError,
   ConnectorRequestError,
   GreenhouseConnector,
+  GenericWebConnector,
   JobTechConnector,
   LeverConnector,
+  TeamtailorConnector,
   mapWithConcurrency,
   type ConnectorContext,
   type JobConnector,
@@ -15,6 +17,7 @@ import {
 import {
   JobRepository,
   ProfileRepository,
+  ScanAlreadyActiveError,
   SourceRepositoryError,
   type DatabaseClient,
 } from '@job-radar/db';
@@ -23,6 +26,7 @@ import {
   type CreateSourceRequest,
   type CreateScanRequest,
   type RunCounts,
+  type ReprocessJobsResult,
   type ScanRun,
   type Source,
   type SourceErrorCategory,
@@ -105,6 +109,8 @@ export class ScanCoordinator {
       new GreenhouseConnector(),
       new LeverConnector(),
       new AshbyConnector(),
+      new TeamtailorConnector(),
+      new GenericWebConnector(),
     ];
     this.connectors = new Map(connectors.map((connector) => [connector.type, connector]));
     this.jobs.ensureDefaultSources(this.now());
@@ -233,12 +239,18 @@ export class ScanCoordinator {
     }
 
     const queries = [...new Set(roles.map((role) => role.trim()).filter(Boolean))];
-    const run = this.jobs.createScan(
-      profile.version,
-      selectedSources,
-      queries,
-      this.now(),
-    );
+    let run: ScanRun;
+    try {
+      run = this.jobs.createScan(profile.version, selectedSources, queries, this.now());
+    } catch (error) {
+      if (error instanceof ScanAlreadyActiveError) {
+        throw new ScanCoordinatorError(
+          'SCAN_ALREADY_RUNNING',
+          'A scan is already queued or running in the local database',
+        );
+      }
+      throw error;
+    }
     const controller = new AbortController();
     const promise = this.execute(run.id, selectedSources, queries, controller.signal)
       .catch(() => undefined)
@@ -276,6 +288,26 @@ export class ScanCoordinator {
     if (!this.active) return;
     this.active.controller.abort();
     await this.active.promise;
+  }
+
+  public reprocessJobs(): ReprocessJobsResult {
+    if (this.active || this.jobs.hasActiveScan()) {
+      throw new ScanCoordinatorError(
+        'SCAN_ALREADY_RUNNING',
+        'Wait for the active scan before reprocessing historical jobs',
+      );
+    }
+    try {
+      return this.jobs.reprocessJobs(this.now());
+    } catch (error) {
+      if (error instanceof ScanAlreadyActiveError) {
+        throw new ScanCoordinatorError(
+          'SCAN_ALREADY_RUNNING',
+          'Wait for the active scan before reprocessing historical jobs',
+        );
+      }
+      throw error;
+    }
   }
 
   private async execute(
@@ -353,8 +385,20 @@ export class ScanCoordinator {
     };
 
     try {
-      await connector.healthCheck(context);
-      this.jobs.updateSourceHealth(source.id, 'healthy', null, null, this.now());
+      const health = await connector.healthCheck(context);
+      if (health.status === 'unavailable') {
+        throw new ConnectorRequestError(
+          health.message ?? `${source.name} is unavailable`,
+          'connector_unavailable',
+        );
+      }
+      this.jobs.updateSourceHealth(
+        source.id,
+        health.status,
+        health.message,
+        null,
+        this.now(),
+      );
       const discovery = await connector.discover(context);
       pagesFetched = discovery.pagesFetched;
       resultSetComplete = discovery.complete;
@@ -383,14 +427,14 @@ export class ScanCoordinator {
         if (ingested.closed) counts.closed += 1;
       }
 
+      const partial = counts.failed > 0;
       const seenIds = new Set(discovery.jobs.map((job) => job.externalId));
       counts.closed += this.jobs.applyLifecycle(
         source,
         seenIds,
-        discovery.complete,
+        discovery.complete && !partial,
         this.now(),
       );
-      const partial = counts.failed > 0;
       const errorSummary = partial
         ? `${counts.failed} discovered job detail${counts.failed === 1 ? '' : 's'} failed`
         : null;
@@ -403,7 +447,14 @@ export class ScanCoordinator {
           this.now(),
         );
       } else {
-        this.jobs.updateSourceHealth(source.id, 'healthy', null, null, this.now(), true);
+        this.jobs.updateSourceHealth(
+          source.id,
+          health.status,
+          health.message,
+          null,
+          this.now(),
+          true,
+        );
       }
       this.jobs.completeSourceRun(runId, source.id, {
         status: partial ? 'partial' : 'succeeded',

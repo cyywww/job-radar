@@ -7,12 +7,15 @@ import {
   createSourceRequestSchema,
   createScanRequestSchema,
   jobDetailSchema,
+  reprocessJobsResultSchema,
   jobsQuerySchema,
   jobsResponseSchema,
   scanRunSchema,
   scansQuerySchema,
   scansResponseSchema,
   sourceTestResultSchema,
+  sourceCapabilities,
+  sourceCapabilitiesResponseSchema,
   sourceViewSchema,
   sourcesResponseSchema,
   updateSourceRequestSchema,
@@ -55,6 +58,10 @@ export async function registerJobRoutes(
     sourcesResponseSchema.parse({ sources: coordinator.listSources() }),
   );
 
+  app.get('/api/source-capabilities', async () =>
+    sourceCapabilitiesResponseSchema.parse(sourceCapabilities),
+  );
+
   app.post('/api/sources', async (request, reply) => {
     try {
       const source = coordinator.createSource(
@@ -93,6 +100,16 @@ export async function registerJobRoutes(
       return sourceTestResultSchema.parse(await coordinator.testSource(id));
     } catch (error) {
       return mapSourceError(error);
+    }
+  });
+
+  app.post('/api/sources/:id/rerun', async (request, reply) => {
+    try {
+      const { id } = idParamsSchema.parse(request.params);
+      const run = coordinator.start({ sourceIds: [id] });
+      return reply.status(202).send(scanRunSchema.parse(run));
+    } catch (error) {
+      return mapCoordinatorError(error);
     }
   });
 
@@ -138,5 +155,13 @@ export async function registerJobRoutes(
     const job = repository.getJob(id);
     if (!job) throw new AppError('JOB_NOT_FOUND', 'Job does not exist', 404);
     return jobDetailSchema.parse(job);
+  });
+
+  app.post('/api/jobs/reprocess', async () => {
+    try {
+      return reprocessJobsResultSchema.parse(coordinator.reprocessJobs());
+    } catch (error) {
+      return mapCoordinatorError(error);
+    }
   });
 }

@@ -1,9 +1,9 @@
 # Job Radar
 
-Job Radar is a local-first job-search workspace. The current milestone is the Phase 4
-structured-source slice: an evidence-backed candidate Profile plus JobTech, Greenhouse,
-Lever, and Ashby collection across full-detail normalization, SQLite history, source
-health, API queries, and browser review.
+Job Radar is a local-first job-search workspace. The current milestone completes the M2
+data-source and lifecycle slice: an evidence-backed candidate Profile plus reviewed job
+collection, deterministic cross-source identity, immutable per-source change history,
+source-aware closure/reopening, health diagnostics, API queries, and browser review.
 
 No real profile, resume, credentials, captured job data, AI scoring, or application
 tracking data is included in this repository. Tests and examples use fictional people,
@@ -18,7 +18,7 @@ organizations, and JobTech responses.
 ## Install
 
 ```bash
-cd /Users/yuweicao/Projects/job-radar
+cd /path/to/job-radar
 pnpm install
 cp .env.example .env.local
 ```
@@ -96,23 +96,44 @@ Profile API contracts are exported from `@job-radar/shared`. Primary routes are:
 
 The default source is the official JobTech JobSearch API. User-configured sources support
 the public Greenhouse Job Board API, Lever Postings API (global or EU), and Ashby Job
-Postings API. Every connector uses bounded retries, timeouts, start-rate and concurrency
-limits, cancellation, typed response validation, and safe error categories. No connector
-uses credentials, browser automation, CAPTCHA bypass, or an undocumented scraping route.
+Postings API. Teamtailor has limited support through its official JSON API and requires a
+company-issued Public Read token supplied only through a named local environment variable.
+The limited generic connector is explicit opt-in, starts paused, accepts one public HTTPS
+URL, and reads only schema.org `JobPosting` JSON-LD. It validates DNS and every redirect,
+pins the validated public IP for the request, and blocks local/private/reserved/metadata
+addresses, credentials, non-HTTPS schemes, nonstandard ports, oversized bodies, login,
+CAPTCHA, and access-control bypass.
 
-The Sources browser workspace can add/configure, test, pause/enable, and delete sources.
-Deletion is soft so historical runs and job provenance remain auditable. Each source shows
-health, a friendly error, aggregate counters, and the latest run. Only fixed API origins
-can be configured; users provide the public board/site identifier, not an arbitrary URL.
+Workday, Jobylon, and SAP SuccessFactors are listed as not supported: their official
+integration paths are tenant-configured or credential/provisioning dependent and do not
+provide a reliable universal public contract. The browser support matrix makes this
+boundary visible instead of presenting an unreliable connector.
+
+The Sources browser workspace can add/configure, test, pause/enable, safely rerun, and
+delete sources. Deletion is soft so historical runs and job provenance remain auditable.
+Each source shows its support level, configuration version, health, a friendly error,
+aggregate counters, and latest run. Fixed-origin connectors accept only a board/site
+identifier; only the deliberately limited generic connector accepts a URL.
+
+Jobs are matched in deterministic order: same-source external ID, normalized canonical
+URL, exact normalized full-description fingerprint with company/title/location, then a
+unique company/title/location/publication-date key. Ambiguous candidates stay separate.
+Every merge stores its strategy and explanation. Material description, location, deadline,
+title, or company changes append a source-specific snapshot. A complete successful source
+scan increments misses; three consecutive misses close that source link. Failed,
+cancelled, incomplete, or detail-partial runs do not advance misses, another open source
+keeps the merged job open, and a later sighting reopens it.
 
 Primary M2 routes are:
 
 - `GET` and `POST /api/sources`
+- `GET /api/source-capabilities`
 - `PATCH` and `DELETE /api/sources/:id`
-- `POST /api/sources/:id/test`
+- `POST /api/sources/:id/test` and `POST /api/sources/:id/rerun`
 - `POST /api/scans`, `GET /api/scans`, and `GET /api/scans/:id`
 - `POST /api/scans/:id/cancel`
 - `GET /api/jobs` and `GET /api/jobs/:id`
+- `POST /api/jobs/reprocess`
 
 Default tests use fixed fictional JSON and never require network access. See
 `docs/connectors.md` for each connector's exact public endpoint, support limits, lifecycle

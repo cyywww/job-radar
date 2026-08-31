@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState, type FormEvent } from 'react';
 
 import type {
   CreateSourceRequest,
+  SourceCapability,
   SourceErrorCategory,
   SourceView,
   UpdateSourceRequest,
@@ -10,20 +11,24 @@ import type {
 import {
   createSource,
   deleteSource,
+  fetchSourceCapabilities,
   fetchSources,
+  rerunSource,
   testSource,
   updateSource,
 } from '../../api/jobs.js';
 
-type AtsType = 'greenhouse' | 'lever' | 'ashby';
+type ConfigurableType = 'greenhouse' | 'lever' | 'ashby' | 'teamtailor' | 'generic_web';
 
 interface SourceDraft {
-  type: AtsType;
+  type: ConfigurableType;
   name: string;
   companyName: string;
   identifier: string;
-  region: 'global' | 'eu';
+  region: 'global' | 'eu' | 'na' | 'au';
   includeCompensation: boolean;
+  apiTokenEnv: string;
+  startUrl: string;
 }
 
 const emptyDraft = (): SourceDraft => ({
@@ -33,6 +38,8 @@ const emptyDraft = (): SourceDraft => ({
   identifier: '',
   region: 'global',
   includeCompensation: true,
+  apiTokenEnv: 'JOB_RADAR_TEAMTAILOR_TOKEN',
+  startUrl: '',
 });
 
 const errorLabels: Record<SourceErrorCategory, string> = {
@@ -44,6 +51,7 @@ const errorLabels: Record<SourceErrorCategory, string> = {
   invalid_response: 'The source returned an unsupported response',
   not_found: 'The configured job board was not found',
   configuration: 'The source configuration is invalid',
+  unsafe_url: 'The URL was blocked by the SSRF safety policy',
   partial_detail: 'Some job details could not be fetched',
   cancelled: 'The scan was cancelled',
   connector_unavailable: 'No connector is available for this source',
@@ -58,7 +66,7 @@ function formatDate(value: string | null): string {
   }).format(new Date(value));
 }
 
-function identifierLabel(type: AtsType): string {
+function identifierLabel(type: ConfigurableType): string {
   if (type === 'greenhouse') return 'Board token';
   if (type === 'lever') return 'Lever site';
   return 'Ashby board name';
@@ -66,6 +74,25 @@ function identifierLabel(type: AtsType): string {
 
 function draftFromSource(source: SourceView): SourceDraft | null {
   if (source.config.kind === 'jobtech') return null;
+  if (source.config.kind === 'teamtailor') {
+    return {
+      ...emptyDraft(),
+      type: 'teamtailor',
+      name: source.name,
+      companyName: source.config.companyName,
+      region: source.config.region,
+      apiTokenEnv: source.config.apiTokenEnv,
+    };
+  }
+  if (source.config.kind === 'generic_web') {
+    return {
+      ...emptyDraft(),
+      type: 'generic_web',
+      name: source.name,
+      companyName: source.config.companyName,
+      startUrl: source.config.startUrl,
+    };
+  }
   return {
     type: source.config.kind,
     name: source.name,
@@ -79,11 +106,14 @@ function draftFromSource(source: SourceView): SourceDraft | null {
     region: source.config.kind === 'lever' ? source.config.region : 'global',
     includeCompensation:
       source.config.kind === 'ashby' ? source.config.includeCompensation : true,
+    apiTokenEnv: 'JOB_RADAR_TEAMTAILOR_TOKEN',
+    startUrl: '',
   };
 }
 
 export function SourcesWorkspace(): React.JSX.Element {
   const [sources, setSources] = useState<SourceView[]>([]);
+  const [capabilities, setCapabilities] = useState<SourceCapability[]>([]);
   const [draft, setDraft] = useState<SourceDraft>(emptyDraft);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [busyId, setBusyId] = useState<string | null>(null);
@@ -94,7 +124,12 @@ export function SourcesWorkspace(): React.JSX.Element {
   const refresh = useCallback(async () => {
     setLoading(true);
     try {
-      setSources(await fetchSources());
+      const [nextSources, nextCapabilities] = await Promise.all([
+        fetchSources(),
+        fetchSourceCapabilities(),
+      ]);
+      setSources(nextSources);
+      setCapabilities(nextCapabilities);
       setError(null);
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : 'Could not load sources');
@@ -124,11 +159,17 @@ export function SourcesWorkspace(): React.JSX.Element {
         const input: UpdateSourceRequest = {
           name: draft.name,
           companyName: draft.companyName,
-          identifier: draft.identifier,
+          ...(['greenhouse', 'lever', 'ashby'].includes(draft.type)
+            ? { identifier: draft.identifier }
+            : {}),
           ...(draft.type === 'lever' ? { region: draft.region } : {}),
           ...(draft.type === 'ashby'
             ? { includeCompensation: draft.includeCompensation }
             : {}),
+          ...(draft.type === 'teamtailor'
+            ? { region: draft.region, apiTokenEnv: draft.apiTokenEnv }
+            : {}),
+          ...(draft.type === 'generic_web' ? { startUrl: draft.startUrl } : {}),
         };
         saved = await updateSource(editingId, input);
       } else {
@@ -146,15 +187,30 @@ export function SourcesWorkspace(): React.JSX.Element {
             name: draft.name,
             companyName: draft.companyName,
             identifier: draft.identifier,
-            region: draft.region,
+            region: draft.region === 'eu' ? 'eu' : 'global',
           };
-        } else {
+        } else if (draft.type === 'ashby') {
           input = {
             type: draft.type,
             name: draft.name,
             companyName: draft.companyName,
             identifier: draft.identifier,
             includeCompensation: draft.includeCompensation,
+          };
+        } else if (draft.type === 'teamtailor') {
+          input = {
+            type: draft.type,
+            name: draft.name,
+            companyName: draft.companyName,
+            region: draft.region === 'na' || draft.region === 'au' ? draft.region : 'eu',
+            apiTokenEnv: draft.apiTokenEnv,
+          };
+        } else {
+          input = {
+            type: draft.type,
+            name: draft.name,
+            companyName: draft.companyName,
+            startUrl: draft.startUrl,
           };
         }
         saved = await createSource(input);
@@ -213,6 +269,22 @@ export function SourcesWorkspace(): React.JSX.Element {
     }
   }
 
+  async function handleRerun(source: SourceView): Promise<void> {
+    setBusyId(source.id);
+    setError(null);
+    setNotice(null);
+    try {
+      const run = await rerunSource(source.id);
+      setNotice(
+        `${source.name} rerun queued with configuration version ${run.sourceRuns[0]?.configVersion ?? source.configVersion}.`,
+      );
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : 'Could not rerun source');
+    } finally {
+      setBusyId(null);
+    }
+  }
+
   async function handleDelete(source: SourceView): Promise<void> {
     if (
       !window.confirm(`Delete ${source.name}? Historical runs and jobs will be kept.`)
@@ -245,11 +317,12 @@ export function SourcesWorkspace(): React.JSX.Element {
     <section className="sources-workspace">
       <div className="page-heading sources-heading">
         <div>
-          <p className="eyebrow">Public ATS connectors</p>
-          <h1>Sources you can trust and pause.</h1>
+          <p className="eyebrow">Reviewed source connectors</p>
+          <h1>Sources with explicit support boundaries.</h1>
           <p>
-            Configure documented public job boards. Connection tests never send a Profile
-            or retain a response body in errors.
+            Supported connectors use reviewed public interfaces. Limited connectors stay
+            paused until you explicitly test and enable them. Connection errors never
+            retain a response body or secret.
           </p>
         </div>
       </div>
@@ -262,7 +335,7 @@ export function SourcesWorkspace(): React.JSX.Element {
           <p className="eyebrow">{editingId ? 'Edit source' : 'Add source'}</p>
           <h2>{editingId ? 'Update this board' : 'Connect a job board'}</h2>
           <label>
-            ATS
+            Source type
             <select
               aria-label="ATS"
               value={draft.type}
@@ -270,13 +343,15 @@ export function SourcesWorkspace(): React.JSX.Element {
               onChange={(event) =>
                 setDraft((current) => ({
                   ...current,
-                  type: event.target.value as AtsType,
+                  type: event.target.value as ConfigurableType,
                 }))
               }
             >
               <option value="greenhouse">Greenhouse</option>
               <option value="lever">Lever</option>
               <option value="ashby">Ashby</option>
+              <option value="teamtailor">Teamtailor (limited)</option>
+              <option value="generic_web">Generic JSON-LD page (limited)</option>
             </select>
           </label>
           <label>
@@ -303,19 +378,21 @@ export function SourcesWorkspace(): React.JSX.Element {
               placeholder="Northstar Example AB"
             />
           </label>
-          <label>
-            {identifierLabel(draft.type)}
-            <input
-              value={draft.identifier}
-              required
-              maxLength={120}
-              pattern="[A-Za-z0-9_-]+"
-              onChange={(event) =>
-                setDraft((current) => ({ ...current, identifier: event.target.value }))
-              }
-              placeholder="northstar-example"
-            />
-          </label>
+          {['greenhouse', 'lever', 'ashby'].includes(draft.type) ? (
+            <label>
+              {identifierLabel(draft.type)}
+              <input
+                value={draft.identifier}
+                required
+                maxLength={120}
+                pattern="[A-Za-z0-9_-]+"
+                onChange={(event) =>
+                  setDraft((current) => ({ ...current, identifier: event.target.value }))
+                }
+                placeholder="northstar-example"
+              />
+            </label>
+          ) : null}
           {draft.type === 'lever' ? (
             <label>
               Lever region
@@ -347,6 +424,70 @@ export function SourcesWorkspace(): React.JSX.Element {
               />
               Include public compensation data
             </label>
+          ) : null}
+          {draft.type === 'teamtailor' ? (
+            <>
+              <label>
+                Teamtailor region
+                <select
+                  value={draft.region === 'global' ? 'eu' : draft.region}
+                  onChange={(event) =>
+                    setDraft((current) => ({
+                      ...current,
+                      region: event.target.value as 'eu' | 'na' | 'au',
+                    }))
+                  }
+                >
+                  <option value="eu">Europe</option>
+                  <option value="na">North America</option>
+                  <option value="au">Asia-Pacific</option>
+                </select>
+              </label>
+              <label>
+                API token environment variable
+                <input
+                  value={draft.apiTokenEnv}
+                  required
+                  pattern="[A-Z][A-Z0-9_]*"
+                  maxLength={120}
+                  onChange={(event) =>
+                    setDraft((current) => ({
+                      ...current,
+                      apiTokenEnv: event.target.value,
+                    }))
+                  }
+                />
+              </label>
+              <p className="audit-note">
+                Store only the variable name here. The Public Read token stays in your
+                local environment and is never saved in SQLite.
+              </p>
+            </>
+          ) : null}
+          {draft.type === 'generic_web' ? (
+            <>
+              <label>
+                Public HTTPS page
+                <input
+                  type="url"
+                  value={draft.startUrl}
+                  required
+                  maxLength={2048}
+                  placeholder="https://careers.example.com/jobs"
+                  onChange={(event) =>
+                    setDraft((current) => ({
+                      ...current,
+                      startUrl: event.target.value,
+                    }))
+                  }
+                />
+              </label>
+              <p className="audit-note">
+                One page only; schema.org JobPosting JSON-LD only. Private networks,
+                metadata services, redirects to unsafe hosts, non-HTTPS URLs, login, and
+                CAPTCHA flows are blocked.
+              </p>
+            </>
           ) : null}
           <div className="source-form__actions">
             <button
@@ -438,6 +579,15 @@ export function SourcesWorkspace(): React.JSX.Element {
                 <button
                   className="button button--secondary"
                   type="button"
+                  disabled={busyId !== null || !source.enabled}
+                  aria-label={`Rerun ${source.name}`}
+                  onClick={() => void handleRerun(source)}
+                >
+                  {busyId === source.id ? 'Working…' : 'Run this source'}
+                </button>
+                <button
+                  className="button button--quiet"
+                  type="button"
                   disabled={busyId !== null}
                   aria-label={`Test ${source.name}`}
                   onClick={() => void handleTest(source)}
@@ -478,6 +628,27 @@ export function SourcesWorkspace(): React.JSX.Element {
           ))}
         </section>
       </div>
+      <section className="source-support" aria-label="Connector support matrix">
+        <div className="source-list__heading">
+          <div>
+            <p className="eyebrow">Support matrix</p>
+            <h2>Reviewed connector coverage</h2>
+          </div>
+        </div>
+        <div className="source-metrics">
+          {capabilities.map((capability) => (
+            <article className="source-item" key={capability.type}>
+              <div className="source-item__title">
+                <strong>{capability.label}</strong>
+                <span className="fact-state fact-state--pending">
+                  {capability.supportLevel.replace('_', ' ')}
+                </span>
+              </div>
+              <p>{capability.reason}</p>
+            </article>
+          ))}
+        </div>
+      </section>
     </section>
   );
 }

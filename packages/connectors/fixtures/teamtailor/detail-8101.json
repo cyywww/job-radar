@@ -1,0 +1,29 @@
+{
+  "data": {
+    "id": "tt-fictional-8101",
+    "type": "jobs",
+    "attributes": {
+      "title": "Fictional Platform Engineer",
+      "body": "<p>Build reliable fictional developer platforms.</p><p>Own APIs and observability.</p>",
+      "status": "published",
+      "company-name": "Northstar Teamtailor Example AB",
+      "created-at": "2026-08-20T08:00:00+02:00",
+      "start-date": "2026-08-21T08:00:00+02:00",
+      "end-date": "2026-10-31T23:59:59+01:00",
+      "employment-type": "full-time",
+      "remote-status": "hybrid",
+      "careersite-job-url": "https://careers.northstar.example/jobs/8101-platform-engineer?utm_source=fixture",
+      "careersite-job-apply-url": "https://careers.northstar.example/jobs/8101-platform-engineer/apply"
+    },
+    "relationships": {
+      "locations": { "data": [{ "id": "location-stockholm", "type": "locations" }] }
+    }
+  },
+  "included": [
+    {
+      "id": "location-stockholm",
+      "type": "locations",
+      "attributes": { "name": "Stockholm", "country": "Sweden" }
+    }
+  ]
+}

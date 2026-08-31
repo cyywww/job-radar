@@ -10,6 +10,7 @@ export default defineConfig({
     'drizzle-orm/better-sqlite3/migrator',
     'drizzle-orm/sqlite-core',
     'pino',
+    'undici',
     'zod',
   ],
   format: ['esm'],

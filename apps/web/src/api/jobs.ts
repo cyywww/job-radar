@@ -5,6 +5,7 @@ import {
   scanRunSchema,
   scansResponseSchema,
   sourceTestResultSchema,
+  sourceCapabilitiesResponseSchema,
   sourceViewSchema,
   sourcesResponseSchema,
   updateSourceRequestSchema,
@@ -13,6 +14,7 @@ import {
   type JobSummary,
   type ScanRun,
   type SourceTestResult,
+  type SourceCapability,
   type SourceView,
   type UpdateSourceRequest,
 } from '@job-radar/shared';
@@ -49,7 +51,7 @@ async function requestJson(path: string, init: RequestInit = {}): Promise<unknow
 }
 
 export async function fetchJobs(): Promise<JobSummary[]> {
-  return jobsResponseSchema.parse(await requestJson('/api/jobs')).jobs;
+  return jobsResponseSchema.parse(await requestJson('/api/jobs?active=all')).jobs;
 }
 
 export async function fetchJob(jobId: string): Promise<JobDetail> {
@@ -58,6 +60,12 @@ export async function fetchJob(jobId: string): Promise<JobDetail> {
 
 export async function fetchSources(): Promise<SourceView[]> {
   return sourcesResponseSchema.parse(await requestJson('/api/sources')).sources;
+}
+
+export async function fetchSourceCapabilities(): Promise<SourceCapability[]> {
+  return sourceCapabilitiesResponseSchema.parse(
+    await requestJson('/api/source-capabilities'),
+  ).capabilities;
 }
 
 export async function createSource(input: CreateSourceRequest): Promise<SourceView> {
@@ -116,5 +124,11 @@ export async function startScan(): Promise<ScanRun> {
 export async function cancelScan(scanRunId: string): Promise<ScanRun> {
   return scanRunSchema.parse(
     await requestJson(`/api/scans/${scanRunId}/cancel`, { method: 'POST' }),
+  );
+}
+
+export async function rerunSource(sourceId: string): Promise<ScanRun> {
+  return scanRunSchema.parse(
+    await requestJson(`/api/sources/${sourceId}/rerun`, { method: 'POST' }),
   );
 }

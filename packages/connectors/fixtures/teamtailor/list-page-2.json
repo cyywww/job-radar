@@ -1,0 +1,14 @@
+{
+  "data": [
+    {
+      "id": "tt-fictional-8102",
+      "type": "jobs",
+      "attributes": {
+        "title": "Fictional Reliability Engineer",
+        "status": "published",
+        "careersite-job-url": "https://careers.northstar.example/jobs/8102-reliability-engineer"
+      }
+    }
+  ],
+  "links": { "next": null }
+}

@@ -56,9 +56,11 @@ applications/
 
 # Editors and macOS
 .DS_Store
+._*
 .idea/
 .vscode/
 
 # Tool caches
+.codex/
 .vite/
 .eslintcache

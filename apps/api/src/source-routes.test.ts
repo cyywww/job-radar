@@ -16,6 +16,7 @@ import { openDatabase, runMigrations, type DatabaseClient } from '@job-radar/db'
 import {
   normalizedJobSchema,
   scanRunSchema,
+  sourceCapabilitiesResponseSchema,
   sourceTestResultSchema,
   sourceViewSchema,
   sourcesResponseSchema,
@@ -139,6 +140,72 @@ beforeEach(async () => {
 afterEach(async () => app.close());
 
 describe('source configuration API', () => {
+  it('exposes support boundaries and keeps limited connectors disabled by default', async () => {
+    const capabilities = sourceCapabilitiesResponseSchema.parse(
+      (await app.inject({ method: 'GET', url: '/api/source-capabilities' })).json(),
+    );
+    expect(capabilities.capabilities).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ type: 'teamtailor', supportLevel: 'limited' }),
+        expect.objectContaining({ type: 'workday', supportLevel: 'not_supported' }),
+        expect.objectContaining({ type: 'jobylon', supportLevel: 'not_supported' }),
+        expect.objectContaining({
+          type: 'successfactors',
+          supportLevel: 'not_supported',
+        }),
+        expect.objectContaining({ type: 'generic_web', supportLevel: 'limited' }),
+      ]),
+    );
+
+    const teamtailorResponse = await app.inject({
+      method: 'POST',
+      url: '/api/sources',
+      payload: {
+        type: 'teamtailor',
+        name: 'Limited Teamtailor',
+        companyName: 'Northstar Source Fixture AB',
+        region: 'eu',
+        apiTokenEnv: 'JOB_RADAR_TEAMTAILOR_TOKEN',
+      },
+    });
+    expect(sourceViewSchema.parse(teamtailorResponse.json())).toMatchObject({
+      enabled: false,
+      supportLevel: 'limited',
+      configVersion: 1,
+      config: { kind: 'teamtailor', apiTokenEnv: 'JOB_RADAR_TEAMTAILOR_TOKEN' },
+    });
+
+    const genericResponse = await app.inject({
+      method: 'POST',
+      url: '/api/sources',
+      payload: {
+        type: 'generic_web',
+        name: 'Limited generic page',
+        companyName: 'Northstar Source Fixture AB',
+        startUrl: 'https://careers.public-example.com/jobs?utm_source=config',
+      },
+    });
+    expect(sourceViewSchema.parse(genericResponse.json())).toMatchObject({
+      enabled: false,
+      supportLevel: 'limited',
+      config: {
+        kind: 'generic_web',
+        startUrl: 'https://careers.public-example.com/jobs',
+      },
+    });
+    const insecure = await app.inject({
+      method: 'POST',
+      url: '/api/sources',
+      payload: {
+        type: 'generic_web',
+        name: 'Unsafe generic page',
+        companyName: 'Northstar Source Fixture AB',
+        startUrl: 'http://127.0.0.1/jobs',
+      },
+    });
+    expect(insecure.statusCode).toBe(400);
+  });
+
   it('adds, tests, edits, pauses, enables, and softly deletes a source', async () => {
     const source = await createSource('greenhouse', 'Northstar Greenhouse');
     expect(source).toMatchObject({
@@ -188,6 +255,34 @@ describe('source configuration API', () => {
       url: `/api/sources/${source.id}/test`,
     });
     expect(missing.statusCode).toBe(404);
+  });
+
+  it('reruns one source with the latest immutable configuration version', async () => {
+    await app.inject({
+      method: 'POST',
+      url: '/api/profile',
+      payload: createFictionalProfileInput(),
+    });
+    const source = await createSource('greenhouse', 'Versioned Greenhouse');
+    const updatedResponse = await app.inject({
+      method: 'PATCH',
+      url: `/api/sources/${source.id}`,
+      payload: { identifier: 'greenhouse-fixture-v2' },
+    });
+    expect(sourceViewSchema.parse(updatedResponse.json()).configVersion).toBe(2);
+
+    const rerunResponse = await app.inject({
+      method: 'POST',
+      url: `/api/sources/${source.id}/rerun`,
+    });
+    expect(rerunResponse.statusCode).toBe(202);
+    const queued = scanRunSchema.parse(rerunResponse.json());
+    expect(queued.sourceRuns).toEqual([
+      expect.objectContaining({ sourceId: source.id, configVersion: 2 }),
+    ]);
+    const completed = await waitForTerminal(queued.id);
+    expect(completed).toMatchObject({ status: 'succeeded' });
+    expect(completed.sourceRuns[0]).toMatchObject({ configVersion: 2 });
   });
 
   it('isolates one failed source and exposes source metrics and latest summaries', async () => {

@@ -82,6 +82,7 @@ export class ConnectorHttpClient {
     policy: ConnectorRequestPolicy,
     context: ConnectorContext,
     operation: ConnectorRetryEvent['operation'],
+    extraHeaders: Readonly<Record<string, string>> = {},
   ): Promise<unknown> {
     let retryStatusCode: number | undefined;
     let nextDelayMs: number | null = null;
@@ -110,7 +111,11 @@ export class ConnectorHttpClient {
 
       try {
         const response = await this.fetchImpl(url, {
-          headers: { accept: 'application/json', 'user-agent': policy.userAgent },
+          headers: {
+            accept: 'application/json',
+            'user-agent': policy.userAgent,
+            ...extraHeaders,
+          },
           signal,
         });
         if (response.ok) {

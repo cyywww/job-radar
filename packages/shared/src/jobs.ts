@@ -1,6 +1,7 @@
 import { z } from 'zod';
 
 export const sourceTypeSchema = z.string().regex(/^[a-z][a-z0-9_-]{1,49}$/);
+export const sourceSupportLevelSchema = z.enum(['supported', 'limited', 'not_supported']);
 export const sourceHealthStatusSchema = z.enum([
   'unknown',
   'healthy',
@@ -17,6 +18,7 @@ export const sourceErrorCategorySchema = z.enum([
   'invalid_response',
   'not_found',
   'configuration',
+  'unsafe_url',
   'partial_detail',
   'cancelled',
   'connector_unavailable',
@@ -82,12 +84,164 @@ export const ashbySourceConfigSchema = z
   })
   .strict();
 
+const environmentVariableSchema = z
+  .string()
+  .trim()
+  .min(1)
+  .max(120)
+  .regex(/^[A-Z][A-Z0-9_]*$/);
+
+export const teamtailorSourceConfigSchema = z
+  .object({
+    kind: z.literal('teamtailor'),
+    companyName: companyNameSchema,
+    region: z.enum(['eu', 'na', 'au']),
+    apiTokenEnv: environmentVariableSchema,
+    pageSize: z.number().int().min(1).max(30),
+    maxPages: z.number().int().min(1).max(100),
+    ...requestPolicyShape,
+  })
+  .strict();
+
+const publicHttpsUrlSchema = z
+  .string()
+  .url()
+  .max(2_048)
+  .refine((value) => new URL(value).protocol === 'https:', 'HTTPS is required')
+  .refine((value) => !new URL(value).username && !new URL(value).password, {
+    message: 'URL credentials are not allowed',
+  });
+
+export const genericWebSourceConfigSchema = z
+  .object({
+    kind: z.literal('generic_web'),
+    startUrl: publicHttpsUrlSchema,
+    companyName: companyNameSchema,
+    maxPostings: z.number().int().min(1).max(500),
+    ...requestPolicyShape,
+  })
+  .strict();
+
 export const sourceConfigSchema = z.discriminatedUnion('kind', [
   jobTechSourceConfigSchema,
   greenhouseSourceConfigSchema,
   leverSourceConfigSchema,
   ashbySourceConfigSchema,
+  teamtailorSourceConfigSchema,
+  genericWebSourceConfigSchema,
 ]);
+
+export const sourceCapabilitySchema = z
+  .object({
+    type: sourceTypeSchema,
+    label: z.string().min(1).max(120),
+    supportLevel: sourceSupportLevelSchema,
+    configurable: z.boolean(),
+    defaultEnabled: z.boolean(),
+    reason: z.string().min(1).max(1_000),
+  })
+  .strict();
+
+export const sourceCapabilitiesResponseSchema = z
+  .object({ capabilities: z.array(sourceCapabilitySchema) })
+  .strict();
+
+export const sourceCapabilities = sourceCapabilitiesResponseSchema.parse({
+  capabilities: [
+    {
+      type: 'jobtech',
+      label: 'JobTech / Platsbanken',
+      supportLevel: 'supported',
+      configurable: false,
+      defaultEnabled: true,
+      reason: 'Official public JSON API with complete job detail.',
+    },
+    {
+      type: 'greenhouse',
+      label: 'Greenhouse',
+      supportLevel: 'supported',
+      configurable: true,
+      defaultEnabled: true,
+      reason: 'Official unauthenticated public Job Board API.',
+    },
+    {
+      type: 'lever',
+      label: 'Lever',
+      supportLevel: 'supported',
+      configurable: true,
+      defaultEnabled: true,
+      reason: 'Official unauthenticated public Postings API.',
+    },
+    {
+      type: 'ashby',
+      label: 'Ashby',
+      supportLevel: 'supported',
+      configurable: true,
+      defaultEnabled: true,
+      reason: 'Official unauthenticated public Job Postings API.',
+    },
+    {
+      type: 'teamtailor',
+      label: 'Teamtailor',
+      supportLevel: 'limited',
+      configurable: true,
+      defaultEnabled: false,
+      reason:
+        'Official JSON:API is supported, but a company-admin-issued Public Read API key is required and must be supplied through an environment variable.',
+    },
+    {
+      type: 'workday',
+      label: 'Workday',
+      supportLevel: 'not_supported',
+      configurable: false,
+      defaultEnabled: false,
+      reason:
+        'Workday documents external career sites but no stable universal public job API; tenant web-service reports require customer configuration.',
+    },
+    {
+      type: 'jobylon',
+      label: 'Jobylon',
+      supportLevel: 'not_supported',
+      configurable: false,
+      defaultEnabled: false,
+      reason:
+        'The official Feed API is provisioned by Jobylon per customer or integration partner, so there is no reliable unauthenticated generic feed contract.',
+    },
+    {
+      type: 'successfactors',
+      label: 'SAP SuccessFactors',
+      supportLevel: 'not_supported',
+      configurable: false,
+      defaultEnabled: false,
+      reason:
+        'Recruiting OData and Marketing APIs require tenant permissions or credentials and do not form a universal public connector.',
+    },
+    {
+      type: 'generic_web',
+      label: 'Generic web (JSON-LD)',
+      supportLevel: 'limited',
+      configurable: true,
+      defaultEnabled: false,
+      reason:
+        'Explicit opt-in only. Reads one public HTTPS page and accepts schema.org JobPosting JSON-LD; no selectors, login, CAPTCHA, or access-control bypass.',
+    },
+  ],
+});
+
+export function sourceCapabilityForType(
+  type: string,
+): z.infer<typeof sourceCapabilitySchema> {
+  return (
+    sourceCapabilities.capabilities.find((capability) => capability.type === type) ?? {
+      type,
+      label: type,
+      supportLevel: 'not_supported',
+      configurable: false,
+      defaultEnabled: false,
+      reason: 'No reviewed connector capability is registered for this source type.',
+    }
+  );
+}
 
 export const sourceSchema = z
   .object({
@@ -97,6 +251,9 @@ export const sourceSchema = z
     baseUrl: z.string().url(),
     enabled: z.boolean(),
     config: sourceConfigSchema,
+    supportLevel: sourceSupportLevelSchema,
+    supportReason: z.string().min(1).max(1_000),
+    configVersion: z.number().int().positive(),
     lastSuccessAt: z.string().datetime({ offset: true }).nullable(),
     lastError: z.string().max(500).nullable(),
     lastErrorCategory: sourceErrorCategorySchema.nullable(),
@@ -133,6 +290,23 @@ export const createSourceRequestSchema = z.discriminatedUnion('type', [
       includeCompensation: z.boolean().default(true),
     })
     .strict(),
+  z
+    .object({
+      type: z.literal('teamtailor'),
+      name: z.string().trim().min(1).max(120),
+      companyName: companyNameSchema,
+      region: z.enum(['eu', 'na', 'au']).default('eu'),
+      apiTokenEnv: environmentVariableSchema,
+    })
+    .strict(),
+  z
+    .object({
+      type: z.literal('generic_web'),
+      name: z.string().trim().min(1).max(120),
+      companyName: companyNameSchema,
+      startUrl: publicHttpsUrlSchema,
+    })
+    .strict(),
 ]);
 
 export const updateSourceRequestSchema = z
@@ -141,8 +315,10 @@ export const updateSourceRequestSchema = z
     enabled: z.boolean().optional(),
     companyName: companyNameSchema.optional(),
     identifier: atsIdentifierSchema.optional(),
-    region: z.enum(['global', 'eu']).optional(),
+    region: z.enum(['global', 'eu', 'na', 'au']).optional(),
     includeCompensation: z.boolean().optional(),
+    apiTokenEnv: environmentVariableSchema.optional(),
+    startUrl: publicHttpsUrlSchema.optional(),
   })
   .strict()
   .refine((value) => Object.keys(value).length > 0, 'At least one change is required');
@@ -204,6 +380,7 @@ export const sourceRunSchema = z
     scanRunId: z.string().uuid(),
     sourceId: z.string().uuid(),
     sourceName: z.string().min(1),
+    configVersion: z.number().int().positive(),
     status: sourceRunStatusSchema,
     queries: z.array(z.string()),
     resultSetComplete: z.boolean().nullable(),
@@ -292,7 +469,9 @@ export const jobSummarySchema = z
     deadline: z.string().datetime({ offset: true }).nullable(),
     firstSeenAt: z.string().datetime({ offset: true }),
     lastSeenAt: z.string().datetime({ offset: true }),
+    lastChangedAt: z.string().datetime({ offset: true }),
     active: z.boolean(),
+    lifecycleStatus: z.enum(['open', 'possibly_closed', 'closed']),
     closedAt: z.string().datetime({ offset: true }).nullable(),
     canonicalUrl: z.string().url(),
     currentSnapshotId: z.string().uuid(),
@@ -304,12 +483,23 @@ export const jobSourceSchema = z
   .object({
     sourceId: z.string().uuid(),
     sourceName: z.string().min(1),
+    sourceType: sourceTypeSchema,
     sourceJobId: z.string().min(1),
     sourceUrl: z.string().url(),
     firstSeenAt: z.string().datetime({ offset: true }),
     lastSeenAt: z.string().datetime({ offset: true }),
     consecutiveMisses: z.number().int().nonnegative(),
     active: z.boolean(),
+    lastChangedAt: z.string().datetime({ offset: true }),
+    matchStrategy: z.enum([
+      'new_job',
+      'source_external_id',
+      'canonical_url',
+      'content_fingerprint',
+      'company_title_location_published',
+      'reprocessed',
+    ]),
+    matchExplanation: z.string().min(1).max(1_000),
     sourceMetadataStored: z.literal(true),
   })
   .strict();
@@ -317,7 +507,16 @@ export const jobSourceSchema = z
 export const jobSnapshotSummarySchema = z
   .object({
     id: z.string().uuid(),
+    sourceId: z.string().uuid().nullable(),
+    sourceName: z.string().min(1).nullable(),
     contentHash: z.string().regex(/^[a-f0-9]{64}$/),
+    company: z.string().min(1),
+    title: z.string().min(1),
+    location: z.string().min(1),
+    deadline: z.string().datetime({ offset: true }).nullable(),
+    changedFields: z.array(
+      z.enum(['initial', 'description', 'location', 'deadline', 'title', 'company']),
+    ),
     fetchedAt: z.string().datetime({ offset: true }),
     rawResponseStored: z.literal(true),
   })
@@ -356,13 +555,27 @@ export const jobsResponseSchema = z
   })
   .strict();
 
+export const reprocessJobsResultSchema = z
+  .object({
+    processed: z.number().int().nonnegative(),
+    canonicalUrlsUpdated: z.number().int().nonnegative(),
+    fingerprintsUpdated: z.number().int().nonnegative(),
+    merged: z.number().int().nonnegative(),
+    snapshotsPreserved: z.number().int().nonnegative(),
+  })
+  .strict();
+
 export type SourceType = z.infer<typeof sourceTypeSchema>;
+export type SourceSupportLevel = z.infer<typeof sourceSupportLevelSchema>;
 export type SourceHealthStatus = z.infer<typeof sourceHealthStatusSchema>;
 export type SourceErrorCategory = z.infer<typeof sourceErrorCategorySchema>;
 export type JobTechSourceConfig = z.infer<typeof jobTechSourceConfigSchema>;
 export type GreenhouseSourceConfig = z.infer<typeof greenhouseSourceConfigSchema>;
 export type LeverSourceConfig = z.infer<typeof leverSourceConfigSchema>;
 export type AshbySourceConfig = z.infer<typeof ashbySourceConfigSchema>;
+export type TeamtailorSourceConfig = z.infer<typeof teamtailorSourceConfigSchema>;
+export type GenericWebSourceConfig = z.infer<typeof genericWebSourceConfigSchema>;
+export type SourceCapability = z.infer<typeof sourceCapabilitySchema>;
 export type SourceConfig = z.infer<typeof sourceConfigSchema>;
 export type Source = z.infer<typeof sourceSchema>;
 export type SourceView = z.infer<typeof sourceViewSchema>;
@@ -378,3 +591,4 @@ export type CreateScanRequest = z.infer<typeof createScanRequestSchema>;
 export type JobsQuery = z.infer<typeof jobsQuerySchema>;
 export type JobSummary = z.infer<typeof jobSummarySchema>;
 export type JobDetail = z.infer<typeof jobDetailSchema>;
+export type ReprocessJobsResult = z.infer<typeof reprocessJobsResultSchema>;

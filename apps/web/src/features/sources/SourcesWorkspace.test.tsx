@@ -4,6 +4,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import {
   createSourceRequestSchema,
+  sourceCapabilities,
   updateSourceRequestSchema,
   type SourceView,
 } from '@job-radar/shared';
@@ -20,6 +21,9 @@ function sourceView(overrides: Partial<SourceView> = {}): SourceView {
     name: 'Northstar careers',
     baseUrl: 'https://boards-api.greenhouse.io',
     enabled: true,
+    supportLevel: 'supported',
+    supportReason: 'Official public fixture.',
+    configVersion: 1,
     config: {
       kind: 'greenhouse',
       boardToken: 'northstar-example',
@@ -82,6 +86,9 @@ describe('SourcesWorkspace', () => {
       async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
         const path = input.toString();
         const method = init?.method ?? 'GET';
+        if (path === '/api/source-capabilities' && method === 'GET') {
+          return response(sourceCapabilities);
+        }
         if (path === '/api/sources' && method === 'GET') return response({ sources });
         if (path === '/api/sources' && method === 'POST') {
           const body = createSourceRequestSchema.parse(JSON.parse(String(init?.body)));

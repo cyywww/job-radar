@@ -1,22 +1,30 @@
 import { createHash, randomUUID } from 'node:crypto';
 
-import { and, desc, eq, inArray, isNull, like, or, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, inArray, isNull, like, or, sql } from 'drizzle-orm';
 
 import {
   ashbySourceConfigSchema,
+  canonicalizeJobUrl,
+  compositeJobIdentity,
+  genericWebSourceConfigSchema,
   greenhouseSourceConfigSchema,
   jobDetailSchema,
   jobSummarySchema,
   jobTechSourceConfigSchema,
   leverSourceConfigSchema,
+  normalizeDescription,
+  normalizeIdentityText,
   scanRunSchema,
   sourceSchema,
+  sourceCapabilityForType,
   sourceViewSchema,
+  teamtailorSourceConfigSchema,
   type CreateSourceRequest,
   type JobDetail,
   type JobSummary,
   type JobsQuery,
   type NormalizedJob,
+  type ReprocessJobsResult,
   type RunCounts,
   type ScanRun,
   type Source,
@@ -30,6 +38,7 @@ import {
 import type { DatabaseClient } from './database.js';
 import {
   jobSnapshots,
+  jobMergeEvents,
   jobSources,
   jobs,
   scanRuns,
@@ -68,6 +77,13 @@ export class SourceRepositoryError extends Error {
   }
 }
 
+export class ScanAlreadyActiveError extends Error {
+  public constructor() {
+    super('A durable scan is already queued or running');
+    this.name = 'ScanAlreadyActiveError';
+  }
+}
+
 const emptyCounts = (): RunCounts => ({
   discovered: 0,
   fetched: 0,
@@ -82,26 +98,12 @@ function date(value: Date | null): string | null {
   return value?.toISOString() ?? null;
 }
 
-function stableValue(value: unknown): unknown {
-  if (Array.isArray(value)) return value.map(stableValue);
-  if (value && typeof value === 'object') {
-    return Object.fromEntries(
-      Object.entries(value as Record<string, unknown>)
-        .filter(([, entry]) => entry !== undefined)
-        .sort(([left], [right]) => left.localeCompare(right))
-        .map(([key, entry]) => [key, stableValue(entry)]),
-    );
-  }
-  return value;
-}
-
-function hashRawData(rawData: Record<string, unknown>): string {
-  return createHash('sha256')
-    .update(JSON.stringify(stableValue(rawData)))
-    .digest('hex');
+function hashText(value: string): string {
+  return createHash('sha256').update(value).digest('hex');
 }
 
 function sourceFromRow(row: typeof sources.$inferSelect): Source {
+  const capability = sourceCapabilityForType(row.type);
   return sourceSchema.parse({
     id: row.id,
     type: row.type,
@@ -109,6 +111,9 @@ function sourceFromRow(row: typeof sources.$inferSelect): Source {
     baseUrl: row.baseUrl,
     enabled: row.enabled,
     config: row.config,
+    supportLevel: capability.supportLevel,
+    supportReason: capability.reason,
+    configVersion: row.configVersion,
     lastSuccessAt: date(row.lastSuccessAt),
     lastError: row.lastError,
     lastErrorCategory: row.lastErrorCategory,
@@ -212,46 +217,86 @@ export class JobRepository {
   public createSource(input: CreateSourceRequest, now = new Date()): Source {
     const id = randomUUID();
     const common = { ...DEFAULT_REQUEST_POLICY };
-    const values =
-      input.type === 'greenhouse'
-        ? {
-            type: input.type,
-            baseUrl: 'https://boards-api.greenhouse.io',
-            config: greenhouseSourceConfigSchema.parse({
-              kind: 'greenhouse',
-              boardToken: input.identifier,
-              companyName: input.companyName,
-              ...common,
-            }),
-          }
-        : input.type === 'lever'
-          ? {
-              type: input.type,
-              baseUrl:
-                input.region === 'eu'
-                  ? 'https://api.eu.lever.co'
-                  : 'https://api.lever.co',
-              config: leverSourceConfigSchema.parse({
-                kind: 'lever',
-                site: input.identifier,
-                companyName: input.companyName,
-                region: input.region,
-                pageSize: 50,
-                maxPages: 20,
-                ...common,
-              }),
-            }
-          : {
-              type: input.type,
-              baseUrl: 'https://api.ashbyhq.com',
-              config: ashbySourceConfigSchema.parse({
-                kind: 'ashby',
-                boardName: input.identifier,
-                companyName: input.companyName,
-                includeCompensation: input.includeCompensation,
-                ...common,
-              }),
-            };
+    let values: Pick<
+      typeof sources.$inferInsert,
+      'type' | 'baseUrl' | 'config' | 'enabled'
+    >;
+    if (input.type === 'greenhouse') {
+      values = {
+        type: input.type,
+        baseUrl: 'https://boards-api.greenhouse.io',
+        enabled: true,
+        config: greenhouseSourceConfigSchema.parse({
+          kind: 'greenhouse',
+          boardToken: input.identifier,
+          companyName: input.companyName,
+          ...common,
+        }),
+      };
+    } else if (input.type === 'lever') {
+      values = {
+        type: input.type,
+        baseUrl:
+          input.region === 'eu' ? 'https://api.eu.lever.co' : 'https://api.lever.co',
+        enabled: true,
+        config: leverSourceConfigSchema.parse({
+          kind: 'lever',
+          site: input.identifier,
+          companyName: input.companyName,
+          region: input.region,
+          pageSize: 50,
+          maxPages: 20,
+          ...common,
+        }),
+      };
+    } else if (input.type === 'ashby') {
+      values = {
+        type: input.type,
+        baseUrl: 'https://api.ashbyhq.com',
+        enabled: true,
+        config: ashbySourceConfigSchema.parse({
+          kind: 'ashby',
+          boardName: input.identifier,
+          companyName: input.companyName,
+          includeCompensation: input.includeCompensation,
+          ...common,
+        }),
+      };
+    } else if (input.type === 'teamtailor') {
+      const origins = {
+        eu: 'https://api.teamtailor.com',
+        na: 'https://api.na.teamtailor.com',
+        au: 'https://api.au.teamtailor.com',
+      } as const;
+      values = {
+        type: input.type,
+        baseUrl: origins[input.region],
+        enabled: false,
+        config: teamtailorSourceConfigSchema.parse({
+          kind: 'teamtailor',
+          companyName: input.companyName,
+          region: input.region,
+          apiTokenEnv: input.apiTokenEnv,
+          pageSize: 30,
+          maxPages: 20,
+          ...common,
+        }),
+      };
+    } else {
+      const startUrl = canonicalizeJobUrl(input.startUrl);
+      values = {
+        type: input.type,
+        baseUrl: startUrl,
+        enabled: false,
+        config: genericWebSourceConfigSchema.parse({
+          kind: 'generic_web',
+          companyName: input.companyName,
+          startUrl,
+          maxPostings: 200,
+          ...common,
+        }),
+      };
+    }
 
     const conflict = this.client.db
       .select({ id: sources.id })
@@ -276,7 +321,6 @@ export class JobRepository {
       .values({
         id,
         name: input.name,
-        enabled: true,
         healthStatus: 'unknown',
         createdAt: now,
         updatedAt: now,
@@ -297,8 +341,12 @@ export class JobRepository {
     }
 
     if (
-      (input.region !== undefined && current.config.kind !== 'lever') ||
+      (input.region !== undefined &&
+        current.config.kind !== 'lever' &&
+        current.config.kind !== 'teamtailor') ||
       (input.includeCompensation !== undefined && current.config.kind !== 'ashby') ||
+      (input.apiTokenEnv !== undefined && current.config.kind !== 'teamtailor') ||
+      (input.startUrl !== undefined && current.config.kind !== 'generic_web') ||
       ((input.companyName !== undefined || input.identifier !== undefined) &&
         current.config.kind === 'jobtech')
     ) {
@@ -334,6 +382,43 @@ export class JobRepository {
           ? {}
           : { includeCompensation: input.includeCompensation }),
       });
+    } else if (config.kind === 'teamtailor') {
+      const region =
+        input.region === 'eu' || input.region === 'na' || input.region === 'au'
+          ? input.region
+          : config.region;
+      config = teamtailorSourceConfigSchema.parse({
+        ...config,
+        region,
+        ...(input.companyName ? { companyName: input.companyName } : {}),
+        ...(input.apiTokenEnv ? { apiTokenEnv: input.apiTokenEnv } : {}),
+      });
+      baseUrl = {
+        eu: 'https://api.teamtailor.com',
+        na: 'https://api.na.teamtailor.com',
+        au: 'https://api.au.teamtailor.com',
+      }[region];
+    } else if (config.kind === 'generic_web') {
+      const startUrl = input.startUrl
+        ? canonicalizeJobUrl(input.startUrl)
+        : config.startUrl;
+      config = genericWebSourceConfigSchema.parse({
+        ...config,
+        startUrl,
+        ...(input.companyName ? { companyName: input.companyName } : {}),
+      });
+      baseUrl = startUrl;
+    }
+
+    if (
+      config.kind === 'lever' &&
+      input.region &&
+      !['global', 'eu'].includes(input.region)
+    ) {
+      throw new SourceRepositoryError(
+        'SOURCE_INVALID_UPDATE',
+        'This region does not apply to Lever',
+      );
     }
 
     if (input.name && input.name !== current.name) {
@@ -363,6 +448,10 @@ export class JobRepository {
         enabled: input.enabled ?? current.enabled,
         baseUrl,
         config,
+        configVersion:
+          JSON.stringify(config) === JSON.stringify(current.config)
+            ? current.configVersion
+            : current.configVersion + 1,
         updatedAt: now,
       })
       .where(eq(sources.id, sourceId))
@@ -426,6 +515,16 @@ export class JobRepository {
       .run();
   }
 
+  public hasActiveScan(): boolean {
+    return Boolean(
+      this.client.db
+        .select({ id: scanRuns.id })
+        .from(scanRuns)
+        .where(or(eq(scanRuns.status, 'queued'), eq(scanRuns.status, 'running')))
+        .get(),
+    );
+  }
+
   public createScan(
     profileVersion: number,
     selectedSources: readonly Source[],
@@ -434,11 +533,18 @@ export class JobRepository {
   ): ScanRun {
     const scanRunId = randomUUID();
     this.client.db.transaction((transaction) => {
+      const existing = transaction
+        .select({ id: scanRuns.id })
+        .from(scanRuns)
+        .where(or(eq(scanRuns.status, 'queued'), eq(scanRuns.status, 'running')))
+        .get();
+      if (existing) throw new ScanAlreadyActiveError();
       transaction
         .insert(scanRuns)
         .values({
           id: scanRunId,
           status: 'queued',
+          dedupeKey: 'active-scan',
           profileVersion,
           createdAt: now,
         })
@@ -451,6 +557,7 @@ export class JobRepository {
             scanRunId,
             sourceId: source.id,
             status: 'queued',
+            configVersion: source.configVersion,
             queries: [...queries],
             createdAt: now,
           })
@@ -494,9 +601,22 @@ export class JobRepository {
     normalized: NormalizedJob,
     now: Date,
   ): IngestResult {
-    const contentHash = hashRawData(normalized.rawData);
+    const canonicalUrl = canonicalizeJobUrl(normalized.canonicalUrl);
+    const sourceUrl = canonicalizeJobUrl(normalized.sourceUrl);
     const deadline = normalized.deadline ? new Date(normalized.deadline) : null;
     const publishedAt = normalized.publishedAt ? new Date(normalized.publishedAt) : null;
+    const descriptionFingerprint = hashText(
+      normalizeDescription(normalized.descriptionText),
+    );
+    const contentHash = hashText(
+      JSON.stringify({
+        company: normalizeIdentityText(normalized.company),
+        title: normalizeIdentityText(normalized.title),
+        location: normalizeIdentityText(normalized.location),
+        deadline: deadline?.toISOString() ?? null,
+        description: normalizeDescription(normalized.descriptionText),
+      }),
+    );
     const shouldBeActive =
       normalized.sourceActive &&
       (deadline === null || deadline.getTime() > now.getTime());
@@ -520,41 +640,117 @@ export class JobRepository {
             .from(jobs)
             .where(eq(jobs.canonicalKey, canonicalKey))
             .get();
+      type MatchStrategy =
+        | 'new_job'
+        | 'source_external_id'
+        | 'canonical_url'
+        | 'content_fingerprint'
+        | 'company_title_location_published';
+      let matchStrategy: MatchStrategy = existingSource
+        ? 'source_external_id'
+        : 'new_job';
+      let matchEvidence: Record<string, unknown> = existingSource
+        ? {
+            sourceId: source.id,
+            externalId: normalized.externalId,
+            explanation: 'Matched the stable external ID within the same source.',
+          }
+        : {
+            explanation: 'No prior deterministic identity matched; created a new job.',
+          };
+
       if (!existingJob && !existingSource) {
+        const sameSourceJobIds = new Set(
+          transaction
+            .select({ jobId: jobSources.jobId })
+            .from(jobSources)
+            .where(eq(jobSources.sourceId, source.id))
+            .all()
+            .map(({ jobId }) => jobId),
+        );
         const candidates = transaction
-          .select({ job: jobs })
+          .select()
           .from(jobs)
-          .innerJoin(jobSnapshots, eq(jobSnapshots.id, jobs.currentSnapshotId))
-          .where(
-            and(
-              eq(
-                sql`lower(trim(${jobs.company}))`,
-                normalized.company.trim().toLowerCase(),
-              ),
-              eq(sql`lower(trim(${jobs.title}))`, normalized.title.trim().toLowerCase()),
-              eq(
-                sql`lower(trim(${jobs.location}))`,
-                normalized.location.trim().toLowerCase(),
-              ),
-              eq(jobSnapshots.descriptionText, normalized.descriptionText),
+          .orderBy(asc(jobs.firstSeenAt), asc(jobs.id))
+          .all()
+          .filter((candidate) => !sameSourceJobIds.has(candidate.id));
+        const unique = (
+          matches: Array<(typeof candidates)[number]>,
+        ): (typeof candidates)[number] | undefined =>
+          matches.length === 1 ? matches[0] : undefined;
+
+        existingJob = unique(
+          candidates.filter((candidate) => {
+            try {
+              return canonicalizeJobUrl(candidate.canonicalUrl) === canonicalUrl;
+            } catch {
+              return false;
+            }
+          }),
+        );
+        if (existingJob) {
+          matchStrategy = 'canonical_url';
+          matchEvidence = {
+            canonicalUrl,
+            explanation: 'Canonical URLs match after removing tracking and fragments.',
+          };
+        }
+
+        if (!existingJob) {
+          existingJob = unique(
+            candidates.filter(
+              (candidate) =>
+                candidate.contentFingerprint === descriptionFingerprint &&
+                normalizeIdentityText(candidate.company) ===
+                  normalizeIdentityText(normalized.company) &&
+                normalizeIdentityText(candidate.title) ===
+                  normalizeIdentityText(normalized.title) &&
+                normalizeIdentityText(candidate.location) ===
+                  normalizeIdentityText(normalized.location),
             ),
-          )
-          .all();
-        existingJob = candidates
-          .map(({ job }) => job)
-          .find(
-            (candidate) =>
-              !transaction
-                .select({ jobId: jobSources.jobId })
-                .from(jobSources)
-                .where(
-                  and(
-                    eq(jobSources.jobId, candidate.id),
-                    eq(jobSources.sourceId, source.id),
-                  ),
-                )
-                .get(),
           );
+          if (existingJob) {
+            matchStrategy = 'content_fingerprint';
+            matchEvidence = {
+              contentFingerprint: descriptionFingerprint,
+              company: normalizeIdentityText(normalized.company),
+              title: normalizeIdentityText(normalized.title),
+              location: normalizeIdentityText(normalized.location),
+              explanation:
+                'Company, title, location, and normalized full-description fingerprint match.',
+            };
+          }
+        }
+
+        if (!existingJob) {
+          const identity = compositeJobIdentity({
+            company: normalized.company,
+            title: normalized.title,
+            location: normalized.location,
+            publishedAt,
+          });
+          if (identity) {
+            existingJob = unique(
+              candidates.filter(
+                (candidate) =>
+                  compositeJobIdentity({
+                    company: candidate.company,
+                    title: candidate.title,
+                    location: candidate.location,
+                    publishedAt: candidate.publishedAt,
+                  }) === identity,
+              ),
+            );
+            if (existingJob) {
+              matchStrategy = 'company_title_location_published';
+              matchEvidence = {
+                compositeIdentity: identity,
+                explanation:
+                  'A single existing job matched normalized company, title, location, and publication date.',
+              };
+            }
+          }
+        }
       }
       const jobId = existingJob?.id ?? randomUUID();
 
@@ -573,28 +769,94 @@ export class JobRepository {
             deadline,
             firstSeenAt: now,
             lastSeenAt: now,
+            lastChangedAt: now,
+            contentFingerprint: descriptionFingerprint,
+            canonicalSourceId: source.id,
             active: shouldBeActive,
             closedAt: shouldBeActive ? null : now,
-            canonicalUrl: normalized.canonicalUrl,
+            canonicalUrl,
           })
           .run();
       } else {
         transaction
           .update(jobs)
           .set({
+            lastSeenAt: now,
+          })
+          .where(eq(jobs.id, jobId))
+          .run();
+      }
+
+      const previousSnapshot = transaction
+        .select()
+        .from(jobSnapshots)
+        .where(and(eq(jobSnapshots.jobId, jobId), eq(jobSnapshots.sourceId, source.id)))
+        .orderBy(desc(jobSnapshots.fetchedAt), desc(jobSnapshots.id))
+        .get();
+      const changedFields: Array<
+        'initial' | 'description' | 'location' | 'deadline' | 'title' | 'company'
+      > = [];
+      if (!previousSnapshot) {
+        changedFields.push('initial');
+      } else {
+        if (
+          normalizeDescription(previousSnapshot.descriptionText) !==
+          normalizeDescription(normalized.descriptionText)
+        )
+          changedFields.push('description');
+        if (
+          normalizeIdentityText(previousSnapshot.location) !==
+          normalizeIdentityText(normalized.location)
+        )
+          changedFields.push('location');
+        if (
+          (previousSnapshot.deadline?.getTime() ?? null) !== (deadline?.getTime() ?? null)
+        )
+          changedFields.push('deadline');
+        if (
+          normalizeIdentityText(previousSnapshot.title) !==
+          normalizeIdentityText(normalized.title)
+        )
+          changedFields.push('title');
+        if (
+          normalizeIdentityText(previousSnapshot.company) !==
+          normalizeIdentityText(normalized.company)
+        )
+          changedFields.push('company');
+      }
+
+      const existingSnapshot = transaction
+        .select()
+        .from(jobSnapshots)
+        .where(
+          and(
+            eq(jobSnapshots.jobId, jobId),
+            eq(jobSnapshots.sourceId, source.id),
+            eq(jobSnapshots.contentHash, contentHash),
+          ),
+        )
+        .get();
+      let snapshotId = existingSnapshot?.id;
+      if (!snapshotId) {
+        snapshotId = randomUUID();
+        transaction
+          .insert(jobSnapshots)
+          .values({
+            id: snapshotId,
+            jobId,
+            sourceId: source.id,
+            scanRunId,
+            contentHash,
             company: normalized.company,
             title: normalized.title,
             location: normalized.location,
-            remoteMode: normalized.remoteMode,
-            employmentType: normalized.employmentType,
-            publishedAt,
             deadline,
-            lastSeenAt: now,
-            active: shouldBeActive,
-            closedAt: shouldBeActive ? null : (existingJob.closedAt ?? now),
-            canonicalUrl: normalized.canonicalUrl,
+            descriptionText: normalized.descriptionText,
+            descriptionHtml: normalized.descriptionHtml,
+            rawJson: normalized.rawData,
+            changedFields,
+            fetchedAt: now,
           })
-          .where(eq(jobs.id, jobId))
           .run();
       }
 
@@ -602,11 +864,15 @@ export class JobRepository {
         transaction
           .update(jobSources)
           .set({
-            sourceUrl: normalized.sourceUrl,
+            sourceUrl,
             lastSeenAt: now,
             lastSeenScanRunId: scanRunId,
             consecutiveMisses: 0,
             active: shouldBeActive,
+            lastChangedAt:
+              existingSnapshot && existingSource.active === shouldBeActive
+                ? existingSource.lastChangedAt
+                : now,
             sourceMetadata: normalized.sourceMetadata,
           })
           .where(and(eq(jobSources.jobId, jobId), eq(jobSources.sourceId, source.id)))
@@ -618,14 +884,58 @@ export class JobRepository {
             jobId,
             sourceId: source.id,
             sourceJobId: normalized.externalId,
-            sourceUrl: normalized.sourceUrl,
+            sourceUrl,
             firstSeenAt: now,
             lastSeenAt: now,
             lastSeenScanRunId: scanRunId,
             consecutiveMisses: 0,
             active: shouldBeActive,
+            lastChangedAt: now,
+            matchStrategy,
+            matchEvidence,
             sourceMetadata: normalized.sourceMetadata,
           })
+          .run();
+      }
+
+      if (existingJob && !existingSource && matchStrategy !== 'new_job') {
+        transaction
+          .insert(jobMergeEvents)
+          .values({
+            id: randomUUID(),
+            jobId,
+            sourceId: source.id,
+            sourceJobId: normalized.externalId,
+            scanRunId,
+            matchStrategy,
+            evidence: matchEvidence,
+            createdAt: now,
+          })
+          .run();
+      }
+
+      const isCanonicalSource =
+        !existingJob ||
+        existingJob.canonicalSourceId === null ||
+        existingJob.canonicalSourceId === source.id;
+      if (isCanonicalSource) {
+        transaction
+          .update(jobs)
+          .set({
+            company: normalized.company,
+            title: normalized.title,
+            location: normalized.location,
+            remoteMode: normalized.remoteMode,
+            employmentType: normalized.employmentType,
+            publishedAt,
+            deadline,
+            canonicalUrl,
+            contentFingerprint: descriptionFingerprint,
+            canonicalSourceId: source.id,
+            currentSnapshotId: snapshotId,
+            ...(!existingSnapshot ? { lastChangedAt: now } : {}),
+          })
+          .where(eq(jobs.id, jobId))
           .run();
       }
 
@@ -640,41 +950,17 @@ export class JobRepository {
         .set({
           active,
           closedAt: active ? null : (existingJob?.closedAt ?? now),
+          ...(existingJob && existingJob.active !== active ? { lastChangedAt: now } : {}),
         })
         .where(eq(jobs.id, jobId))
         .run();
 
-      const existingSnapshot = transaction
-        .select()
-        .from(jobSnapshots)
-        .where(
-          and(eq(jobSnapshots.jobId, jobId), eq(jobSnapshots.contentHash, contentHash)),
-        )
-        .get();
-      let snapshotId = existingSnapshot?.id;
-      if (!snapshotId) {
-        snapshotId = randomUUID();
-        transaction
-          .insert(jobSnapshots)
-          .values({
-            id: snapshotId,
-            jobId,
-            contentHash,
-            descriptionText: normalized.descriptionText,
-            descriptionHtml: normalized.descriptionHtml,
-            rawJson: normalized.rawData,
-            fetchedAt: now,
-          })
-          .run();
-      }
-      transaction
-        .update(jobs)
-        .set({ currentSnapshotId: snapshotId })
-        .where(eq(jobs.id, jobId))
-        .run();
-
       return {
-        outcome: !existingJob ? 'created' : existingSnapshot ? 'unchanged' : 'updated',
+        outcome: !existingJob
+          ? 'created'
+          : existingSource && existingSnapshot
+            ? 'unchanged'
+            : 'updated',
         closed: Boolean(existingJob?.active && !active),
       };
     });
@@ -705,7 +991,11 @@ export class JobRepository {
         const misses = link.consecutiveMisses + 1;
         transaction
           .update(jobSources)
-          .set({ consecutiveMisses: misses, active: misses < missingThreshold })
+          .set({
+            consecutiveMisses: misses,
+            active: misses < missingThreshold,
+            ...(misses >= missingThreshold ? { lastChangedAt: now } : {}),
+          })
           .where(
             and(eq(jobSources.jobId, link.jobId), eq(jobSources.sourceId, source.id)),
           )
@@ -724,13 +1014,278 @@ export class JobRepository {
         if (job.active && !active) closed += 1;
         transaction
           .update(jobs)
-          .set({ active, closedAt: active ? null : (job.closedAt ?? now) })
+          .set({
+            active,
+            closedAt: active ? null : (job.closedAt ?? now),
+            ...(job.active !== active ? { lastChangedAt: now } : {}),
+          })
           .where(eq(jobs.id, jobId))
           .run();
       }
     });
 
     return closed;
+  }
+
+  public reprocessJobs(now = new Date()): ReprocessJobsResult {
+    if (this.hasActiveScan()) throw new ScanAlreadyActiveError();
+    const initialJobs = this.client.db
+      .select()
+      .from(jobs)
+      .orderBy(asc(jobs.firstSeenAt), asc(jobs.id))
+      .all();
+    const snapshotsBefore =
+      this.client.db
+        .select({ count: sql<number>`count(*)` })
+        .from(jobSnapshots)
+        .get()?.count ?? 0;
+    let canonicalUrlsUpdated = 0;
+    let fingerprintsUpdated = 0;
+    let merged = 0;
+
+    this.client.db.transaction((transaction) => {
+      for (const job of initialJobs) {
+        const snapshot = job.currentSnapshotId
+          ? transaction
+              .select()
+              .from(jobSnapshots)
+              .where(eq(jobSnapshots.id, job.currentSnapshotId))
+              .get()
+          : undefined;
+        if (!snapshot) continue;
+        let canonicalUrl = job.canonicalUrl;
+        try {
+          canonicalUrl = canonicalizeJobUrl(job.canonicalUrl);
+        } catch {
+          // Historical invalid URLs remain visible but are never fetched by reprocessing.
+        }
+        const fingerprint = hashText(normalizeDescription(snapshot.descriptionText));
+        if (canonicalUrl !== job.canonicalUrl) canonicalUrlsUpdated += 1;
+        if (fingerprint !== job.contentFingerprint) fingerprintsUpdated += 1;
+        const links = transaction
+          .select()
+          .from(jobSources)
+          .where(eq(jobSources.jobId, job.id))
+          .orderBy(asc(jobSources.firstSeenAt), asc(jobSources.sourceId))
+          .all();
+        const firstLink = links[0];
+        for (const link of links) {
+          try {
+            const sourceUrl = canonicalizeJobUrl(link.sourceUrl);
+            if (sourceUrl === link.sourceUrl) continue;
+            canonicalUrlsUpdated += 1;
+            transaction
+              .update(jobSources)
+              .set({ sourceUrl })
+              .where(
+                and(
+                  eq(jobSources.jobId, link.jobId),
+                  eq(jobSources.sourceId, link.sourceId),
+                ),
+              )
+              .run();
+          } catch {
+            // Historical invalid source URLs remain visible but are never fetched here.
+          }
+        }
+        transaction
+          .update(jobs)
+          .set({
+            canonicalUrl,
+            contentFingerprint: fingerprint,
+            canonicalSourceId: job.canonicalSourceId ?? firstLink?.sourceId ?? null,
+          })
+          .where(eq(jobs.id, job.id))
+          .run();
+        if (firstLink) {
+          transaction
+            .update(jobSnapshots)
+            .set({ sourceId: firstLink.sourceId })
+            .where(and(eq(jobSnapshots.jobId, job.id), isNull(jobSnapshots.sourceId)))
+            .run();
+        }
+      }
+
+      let changed = true;
+      while (changed) {
+        changed = false;
+        const current = transaction
+          .select()
+          .from(jobs)
+          .orderBy(asc(jobs.firstSeenAt), asc(jobs.id))
+          .all();
+        type CurrentJob = (typeof current)[number];
+        type ReprocessStrategy =
+          'canonical_url' | 'content_fingerprint' | 'company_title_location_published';
+        const sourceSets = new Map(
+          current.map((job) => [
+            job.id,
+            new Set(
+              transaction
+                .select({ sourceId: jobSources.sourceId })
+                .from(jobSources)
+                .where(eq(jobSources.jobId, job.id))
+                .all()
+                .map(({ sourceId }) => sourceId),
+            ),
+          ]),
+        );
+        const findUniqueMatch = (
+          subject: CurrentJob,
+        ): { job: CurrentJob; strategy: ReprocessStrategy } | null => {
+          const subjectSources = sourceSets.get(subject.id) ?? new Set<string>();
+          const candidates = current.filter(
+            (candidate) =>
+              candidate.id !== subject.id &&
+              ![...(sourceSets.get(candidate.id) ?? new Set<string>())].some((sourceId) =>
+                subjectSources.has(sourceId),
+              ),
+          );
+          const select = (
+            matches: CurrentJob[],
+            strategy: ReprocessStrategy,
+          ): { job: CurrentJob; strategy: ReprocessStrategy } | null | undefined =>
+            matches.length === 0
+              ? undefined
+              : matches.length === 1
+                ? { job: matches[0]!, strategy }
+                : null;
+
+          const urlMatch = select(
+            candidates.filter(
+              (candidate) => candidate.canonicalUrl === subject.canonicalUrl,
+            ),
+            'canonical_url',
+          );
+          if (urlMatch !== undefined) return urlMatch;
+
+          const contentMatch = select(
+            candidates.filter(
+              (candidate) =>
+                subject.contentFingerprint !== '' &&
+                subject.contentFingerprint === candidate.contentFingerprint &&
+                normalizeIdentityText(subject.company) ===
+                  normalizeIdentityText(candidate.company) &&
+                normalizeIdentityText(subject.title) ===
+                  normalizeIdentityText(candidate.title) &&
+                normalizeIdentityText(subject.location) ===
+                  normalizeIdentityText(candidate.location),
+            ),
+            'content_fingerprint',
+          );
+          if (contentMatch !== undefined) return contentMatch;
+
+          const composite = compositeJobIdentity({
+            company: subject.company,
+            title: subject.title,
+            location: subject.location,
+            publishedAt: subject.publishedAt,
+          });
+          if (!composite) return null;
+          return (
+            select(
+              candidates.filter(
+                (candidate) =>
+                  compositeJobIdentity({
+                    company: candidate.company,
+                    title: candidate.title,
+                    location: candidate.location,
+                    publishedAt: candidate.publishedAt,
+                  }) === composite,
+              ),
+              'company_title_location_published',
+            ) ?? null
+          );
+        };
+
+        for (let keeperIndex = 0; keeperIndex < current.length; keeperIndex += 1) {
+          const keeper = current[keeperIndex];
+          if (!keeper) continue;
+          const match = findUniqueMatch(keeper);
+          if (!match) continue;
+          const duplicateIndex = current.findIndex((job) => job.id === match.job.id);
+          if (duplicateIndex < keeperIndex) continue;
+          const reverse = findUniqueMatch(match.job);
+          if (
+            !reverse ||
+            reverse.job.id !== keeper.id ||
+            reverse.strategy !== match.strategy
+          ) {
+            continue;
+          }
+          const duplicate = match.job;
+          const strategy = match.strategy;
+          const explanation = `Historical jobs were deterministically merged during reprocessing by ${strategy.replaceAll('_', ' ')}.`;
+          transaction
+            .update(jobSnapshots)
+            .set({ jobId: keeper.id })
+            .where(eq(jobSnapshots.jobId, duplicate.id))
+            .run();
+          transaction
+            .update(jobSources)
+            .set({
+              jobId: keeper.id,
+              matchStrategy: 'reprocessed',
+              matchEvidence: { explanation, originalStrategy: strategy },
+            })
+            .where(eq(jobSources.jobId, duplicate.id))
+            .run();
+          transaction
+            .update(jobMergeEvents)
+            .set({ jobId: keeper.id })
+            .where(eq(jobMergeEvents.jobId, duplicate.id))
+            .run();
+          transaction
+            .insert(jobMergeEvents)
+            .values({
+              id: randomUUID(),
+              jobId: keeper.id,
+              absorbedJobId: duplicate.id,
+              matchStrategy: 'reprocessed',
+              evidence: { explanation, originalStrategy: strategy },
+              createdAt: now,
+            })
+            .run();
+          transaction
+            .update(jobs)
+            .set({
+              firstSeenAt:
+                keeper.firstSeenAt < duplicate.firstSeenAt
+                  ? keeper.firstSeenAt
+                  : duplicate.firstSeenAt,
+              lastSeenAt:
+                keeper.lastSeenAt > duplicate.lastSeenAt
+                  ? keeper.lastSeenAt
+                  : duplicate.lastSeenAt,
+              lastChangedAt: now,
+              active: keeper.active || duplicate.active,
+              closedAt: keeper.active || duplicate.active ? null : keeper.closedAt,
+            })
+            .where(eq(jobs.id, keeper.id))
+            .run();
+          transaction.delete(jobs).where(eq(jobs.id, duplicate.id)).run();
+          merged += 1;
+          changed = true;
+          break;
+        }
+      }
+    });
+
+    const snapshotsAfter =
+      this.client.db
+        .select({ count: sql<number>`count(*)` })
+        .from(jobSnapshots)
+        .get()?.count ?? 0;
+    if (snapshotsAfter !== snapshotsBefore) {
+      throw new Error('Job reprocessing changed immutable snapshot history');
+    }
+    return {
+      processed: initialJobs.length,
+      canonicalUrlsUpdated,
+      fingerprintsUpdated,
+      merged,
+      snapshotsPreserved: snapshotsAfter,
+    };
   }
 
   public completeSourceRun(
@@ -921,17 +1476,33 @@ export class JobRepository {
       sources: sourceRows.map(({ link, source }) => ({
         sourceId: source.id,
         sourceName: source.name,
+        sourceType: source.type,
         sourceJobId: link.sourceJobId,
         sourceUrl: link.sourceUrl,
         firstSeenAt: link.firstSeenAt.toISOString(),
         lastSeenAt: link.lastSeenAt.toISOString(),
         consecutiveMisses: link.consecutiveMisses,
         active: link.active,
+        lastChangedAt: link.lastChangedAt.toISOString(),
+        matchStrategy: link.matchStrategy,
+        matchExplanation:
+          typeof link.matchEvidence.explanation === 'string'
+            ? link.matchEvidence.explanation
+            : 'Deterministic source identity was recorded.',
         sourceMetadataStored: true,
       })),
       snapshot: {
         id: snapshot.id,
+        sourceId: snapshot.sourceId,
+        sourceName:
+          sourceRows.find(({ source }) => source.id === snapshot.sourceId)?.source.name ??
+          null,
         contentHash: snapshot.contentHash,
+        company: snapshot.company,
+        title: snapshot.title,
+        location: snapshot.location,
+        deadline: date(snapshot.deadline),
+        changedFields: snapshot.changedFields,
         descriptionText: snapshot.descriptionText,
         descriptionHtml: snapshot.descriptionHtml,
         fetchedAt: snapshot.fetchedAt.toISOString(),
@@ -939,7 +1510,16 @@ export class JobRepository {
       },
       history: history.map((entry) => ({
         id: entry.id,
+        sourceId: entry.sourceId,
+        sourceName:
+          sourceRows.find(({ source }) => source.id === entry.sourceId)?.source.name ??
+          null,
         contentHash: entry.contentHash,
+        company: entry.company,
+        title: entry.title,
+        location: entry.location,
+        deadline: date(entry.deadline),
+        changedFields: entry.changedFields,
         fetchedAt: entry.fetchedAt.toISOString(),
         rawResponseStored: true,
       })),
@@ -959,12 +1539,33 @@ export class JobRepository {
       deadline: date(row.deadline),
       firstSeenAt: row.firstSeenAt.toISOString(),
       lastSeenAt: row.lastSeenAt.toISOString(),
+      lastChangedAt: row.lastChangedAt.toISOString(),
       active: row.active,
+      lifecycleStatus: this.lifecycleStatus(row.id, row.active),
       closedAt: date(row.closedAt),
       canonicalUrl: row.canonicalUrl,
       currentSnapshotId: row.currentSnapshotId,
       sourceCount,
     });
+  }
+
+  private lifecycleStatus(
+    jobId: string,
+    active: boolean,
+  ): 'open' | 'possibly_closed' | 'closed' {
+    if (!active) return 'closed';
+    const confirmedOpen = this.client.db
+      .select({ jobId: jobSources.jobId })
+      .from(jobSources)
+      .where(
+        and(
+          eq(jobSources.jobId, jobId),
+          eq(jobSources.active, true),
+          eq(jobSources.consecutiveMisses, 0),
+        ),
+      )
+      .get();
+    return confirmedOpen ? 'open' : 'possibly_closed';
   }
 
   private scanFromRow(row: typeof scanRuns.$inferSelect): ScanRun {
@@ -980,6 +1581,7 @@ export class JobRepository {
       scanRunId: run.scanRunId,
       sourceId: run.sourceId,
       sourceName,
+      configVersion: run.configVersion,
       status: run.status,
       queries: run.queries,
       resultSetComplete: run.resultSetComplete,
@@ -1062,6 +1664,7 @@ export class JobRepository {
             scanRunId: latest.scanRunId,
             sourceId: latest.sourceId,
             sourceName: source.name,
+            configVersion: latest.configVersion,
             status: latest.status,
             queries: latest.queries,
             resultSetComplete: latest.resultSetComplete,

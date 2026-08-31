@@ -8,7 +8,14 @@ import {
   leverSourceConfigSchema,
   normalizedJobSchema,
   scanRunSchema,
+  sourceCapabilities,
+  teamtailorSourceConfigSchema,
 } from './jobs.js';
+import {
+  canonicalizeJobUrl,
+  compositeJobIdentity,
+  normalizeDescription,
+} from './job-identity.js';
 
 const requestPolicy = {
   detailConcurrency: 2,
@@ -100,6 +107,33 @@ describe('job collection contracts', () => {
     ).toThrow();
   });
 
+  it('records reviewed support levels for every planned source', () => {
+    const levels = Object.fromEntries(
+      sourceCapabilities.capabilities.map((capability) => [
+        capability.type,
+        capability.supportLevel,
+      ]),
+    );
+    expect(levels).toMatchObject({
+      teamtailor: 'limited',
+      workday: 'not_supported',
+      jobylon: 'not_supported',
+      successfactors: 'not_supported',
+      generic_web: 'limited',
+    });
+    expect(
+      teamtailorSourceConfigSchema.parse({
+        kind: 'teamtailor',
+        companyName: 'Northstar Example AB',
+        region: 'eu',
+        apiTokenEnv: 'JOB_RADAR_TEAMTAILOR_TOKEN',
+        pageSize: 30,
+        maxPages: 10,
+        ...requestPolicy,
+      }).apiTokenEnv,
+    ).toBe('JOB_RADAR_TEAMTAILOR_TOKEN');
+  });
+
   it('does not accept an untracked scan state', () => {
     expect(() =>
       scanRunSchema.parse({
@@ -107,5 +141,27 @@ describe('job collection contracts', () => {
         status: 'mystery',
       }),
     ).toThrow();
+  });
+});
+
+describe('deterministic job identity', () => {
+  it('canonicalizes tracking, fragments, case, default ports, and query order', () => {
+    expect(
+      canonicalizeJobUrl(
+        'HTTPS://Careers.Example.test:443//jobs/role/?utm_source=x&b=2&a=1#apply',
+      ),
+    ).toBe('https://careers.example.test/jobs/role?a=1&b=2');
+  });
+
+  it('normalizes content and builds a publication-day composite', () => {
+    expect(normalizeDescription('  Build   APIs ; safely. ')).toBe('build apis;safely.');
+    expect(
+      compositeJobIdentity({
+        company: ' Northstar AB ',
+        title: 'Platform  Engineer',
+        location: 'Stockholm',
+        publishedAt: '2026-08-31T22:00:00+02:00',
+      }),
+    ).toBe('northstar ab|platform engineer|stockholm|2026-08-31');
   });
 });

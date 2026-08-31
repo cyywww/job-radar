@@ -108,19 +108,22 @@ Profile tables or writes SQLite. The API scan coordinator supplies confirmed-rol
 cancellation, and retry accounting, while `JobRepository` owns identity and persistence.
 This keeps later ATS adapters reusable without copying orchestration or privacy policy.
 
-## ADR-016: complete raw details back immutable, content-addressed snapshots
+## ADR-016: material normalized content identifies source-specific snapshots
 
 Every successful detail normalization includes the complete parsed source response. The
-repository stable-sorts and SHA-256 hashes that response, stores it locally in
-`job_snapshots.raw_json`, and appends only when the hash is new for the job. Normal APIs do
-not expose the raw object. This balances source auditability, full-JD retention, and repeat
-scan idempotency without putting descriptions in logs.
+repository SHA-256 hashes the normalized company, title, location, deadline, and complete
+description, stores the raw response locally in `job_snapshots.raw_json`, and appends only
+when that material hash is new for the job and source. Transport-only raw-response changes
+therefore do not create false history. Normal APIs do not expose the raw object. This
+balances source auditability, full-JD retention, and repeat-scan idempotency without
+putting descriptions in logs.
 
 ## ADR-017: disappearance requires a complete discovery set
 
 A connector explicitly reports whether pagination exhausted every configured query.
-Only a complete result set can increment source-link misses; the third consecutive miss
-closes the link. Failed, cancelled, or page-capped scans cannot close jobs by absence.
+Only a complete result set with no detail failures can increment source-link misses; the
+third consecutive miss closes the link. Failed, cancelled, page-capped, or detail-partial
+scans cannot close jobs by absence.
 Deadlines and explicit upstream removal remain immediate closure signals. This prevents a
 rate limit or result cap from silently turning active jobs into false closures.
 
@@ -184,3 +187,74 @@ The Sources API computes aggregate successes, failures, retries, and job counter
 SourceRun rows and returns the latest SourceRun alongside Source health. No parallel
 in-memory metrics store is introduced. Metrics therefore remain consistent with audit
 history and survive restarts at local scale.
+
+## ADR-026: connector support is an explicit product contract
+
+Every planned source appears in one shared capability catalog as `supported`, `limited`,
+or `not_supported`. Supported sources have a reviewed stable public contract. Limited
+sources are configurable but start paused and expose the additional operational boundary.
+Workday, Jobylon, and SAP SuccessFactors remain non-configurable because their official
+integration paths are tenant-specific, credentialed, or provisioned and do not establish
+a reliable universal public jobs contract. This is preferable to encoding undocumented
+tenant URLs as apparent platform support.
+
+Teamtailor is limited because its official JSON API requires a company-admin-issued Public
+Read token. The configuration persists only the environment-variable name, never the
+token. Generic web is also limited and explicit opt-in; it recognizes only schema.org
+`JobPosting` JSON-LD on one page.
+
+## ADR-027: user-configured web URLs are resolved and pinned before fetching
+
+Generic web requires HTTPS on port 443 without credentials. Literal and DNS-resolved IPs
+are checked against loopback, private, link-local, reserved, multicast, documentation/test,
+and metadata ranges for IPv4 and IPv6. All returned DNS addresses must be public, and the
+request transport pins one validated address so a second lookup cannot rebind the host.
+Redirects are followed manually and revalidated at every hop. Size, redirect-count, and
+HTML content-type limits bound the response. No JavaScript, selector scraping, login,
+CAPTCHA, or access-control bypass is implemented.
+
+## ADR-028: cross-source identity is deterministic, unique, and explainable
+
+The matcher uses ordered evidence: same-source external ID, canonical URL, exact normalized
+description fingerprint together with company/title/location, then a unique normalized
+company/title/location/publication-day identity. A rule applies only when it has exactly
+one candidate; ambiguous candidates remain separate. Each JobSource stores the chosen
+strategy and evidence, and each cross-source merge appends a merge event. Fuzzy similarity
+and AI-assisted identity remain deferred until there is an explicit eval-backed policy.
+
+URL normalization removes credentials, fragments, default ports, and known tracking
+parameters, normalizes host/path, and sorts retained query parameters. Normalized full
+descriptions use a SHA-256 fingerprint. A controlled reprocessor can apply newer
+normalization to old Jobs and merge only disjoint-source candidates while retaining the
+same number of immutable snapshots.
+
+## ADR-029: job state is the aggregate of source-link state
+
+Snapshots and misses are source-specific. Material description, location, deadline, title,
+or company changes append a snapshot with explicit changed fields. Only a complete source
+result with no detail failures can advance misses; failed, cancelled, capped, or
+detail-partial runs cannot. One or two misses make an otherwise-open Job
+`possibly_closed`; the third closes that link. A Job closes only when every attached source
+link is closed, and any later observation resets the link misses and reopens the aggregate
+Job. This prevents one source failure or delisting from overriding another source that
+still observes the posting.
+
+## ADR-030: configuration versions and a database guard make reruns reproducible
+
+Material source edits increment `config_version`, and each SourceRun captures the version
+used at queue time. A source-specific rerun creates a normal durable ScanRun against the
+current version, preserving prior run history. A partial unique SQLite index and
+transactional preflight enforce one queued/running scan across simultaneous requests, and
+job reprocessing refuses to start while a scan is active. This keeps retries and browser
+double-clicks from creating overlapping mutation tasks without introducing an external
+queue before its owning phase.
+
+## ADR-031: bounded detail concurrency preserves deterministic source ordering
+
+A scan processes enabled sources in their stable configured order while each connector
+fetches details with its own bounded concurrency. This deliberately narrows the plan's
+parallel-connector sketch: source-order persistence makes canonical-source selection and
+merge explanations repeatable, bounds aggregate upstream load, and avoids competing local
+SQLite mutation streams. The durable active-scan guard prevents overlapping scans; wider
+parallelism can be reconsidered with the later scheduler/queue and an explicit
+deterministic commit stage.
