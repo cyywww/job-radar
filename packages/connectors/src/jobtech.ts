@@ -19,6 +19,12 @@ import { ConnectorHttpClient, type ConnectorHttpDependencies } from './http.js';
 import { canonicalizeUrl } from './util.js';
 
 const optionalNullableString = z.string().nullable().optional();
+const taxonomyItemSchema = z
+  .object({
+    concept_id: optionalNullableString,
+    label: optionalNullableString,
+  })
+  .passthrough();
 const jobTechAdSchema = z
   .object({
     id: z.union([z.string(), z.number()]).transform(String),
@@ -46,13 +52,25 @@ const jobTechAdSchema = z
       .object({
         city: optionalNullableString,
         municipality: optionalNullableString,
+        municipality_code: optionalNullableString,
+        municipality_concept_id: optionalNullableString,
         region: optionalNullableString,
+        region_code: optionalNullableString,
+        region_concept_id: optionalNullableString,
         country: optionalNullableString,
       })
       .passthrough()
       .nullable()
       .optional(),
     publication_date: optionalNullableString,
+    occupation_group: taxonomyItemSchema.nullable().optional(),
+    must_have: z
+      .object({
+        languages: z.array(taxonomyItemSchema).optional(),
+      })
+      .passthrough()
+      .nullable()
+      .optional(),
     removed: z.boolean().nullable().optional(),
     remote_work: z.boolean().nullable().optional(),
   })
@@ -220,6 +238,13 @@ export class JobTechConnector implements JobConnector<
       sourceMetadata: {
         externalId: ad.external_id ?? null,
         workplace: ad.employer?.workplace ?? null,
+        occupationGroup: ad.occupation_group?.label ?? null,
+        municipalityCode: ad.workplace_address?.municipality_code ?? null,
+        municipalityConceptId: ad.workplace_address?.municipality_concept_id ?? null,
+        mustHaveLanguages:
+          ad.must_have?.languages
+            ?.map((language) => language.label?.trim())
+            .filter((label): label is string => Boolean(label)) ?? [],
       },
       rawData: ad,
     });
@@ -237,6 +262,7 @@ export class JobTechConnector implements JobConnector<
   ): URL {
     const url = new URL('/search', context.source.baseUrl);
     url.searchParams.set('q', query);
+    url.searchParams.set('occupation-field', this.config(context).occupationField);
     url.searchParams.set('offset', String(offset));
     url.searchParams.set('limit', String(limit));
     return url;

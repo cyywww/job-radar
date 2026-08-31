@@ -14,8 +14,6 @@ import {
   scansQuerySchema,
   scansResponseSchema,
   sourceTestResultSchema,
-  sourceCapabilities,
-  sourceCapabilitiesResponseSchema,
   sourceViewSchema,
   sourcesResponseSchema,
   updateSourceRequestSchema,
@@ -56,10 +54,6 @@ export async function registerJobRoutes(
 
   app.get('/api/sources', async () =>
     sourcesResponseSchema.parse({ sources: coordinator.listSources() }),
-  );
-
-  app.get('/api/source-capabilities', async () =>
-    sourceCapabilitiesResponseSchema.parse(sourceCapabilities),
   );
 
   app.post('/api/sources', async (request, reply) => {

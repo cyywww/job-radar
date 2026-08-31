@@ -158,7 +158,7 @@ export class GenericWebConnector implements JobConnector<
   public async healthCheck(context: ConnectorContext): Promise<ConnectorHealthResult> {
     const config = this.config(context);
     const page = await this.web.requestHtml(
-      'Generic web',
+      'Target company page',
       config.startUrl,
       config,
       context,
@@ -179,7 +179,7 @@ export class GenericWebConnector implements JobConnector<
   ): Promise<DiscoveryResult<GenericWebDiscoveredJob>> {
     const config = this.config(context);
     const page = await this.web.requestHtml(
-      'Generic web',
+      'Target company page',
       config.startUrl,
       config,
       context,

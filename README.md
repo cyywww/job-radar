@@ -1,133 +1,95 @@
 # Job Radar
 
-Job Radar is a local-first job-search workspace. The current milestone completes the M2
-data-source and lifecycle slice: an evidence-backed candidate Profile plus reviewed job
-collection, deterministic cross-source identity, immutable per-source change history,
-source-aware closure/reopening, health diagnostics, API queries, and browser review.
+Job Radar is a local-first workspace for finding Swedish Data/IT jobs. It keeps one
+evidence-backed candidate Profile, collects jobs from a deliberately small source set,
+deduplicates them deterministically, and records source health and immutable job history.
 
-No real profile, resume, credentials, captured job data, AI scoring, or application
-tracking data is included in this repository. Tests and examples use fictional people,
-organizations, and JobTech responses.
+The repository contains no real profile, resume, credentials, captured jobs, AI scoring,
+or application tracking data. Tests and fixtures are fictional and offline.
 
 ## Requirements
 
-- macOS or another Unix-like environment
 - Node.js 22.12 or newer
-- pnpm 10 or newer (the workspace was verified with pnpm 11)
+- pnpm 10 or newer
+- macOS or another Unix-like environment
 
-## Install
+## Setup and development
 
 ```bash
-cd /path/to/job-radar
 pnpm install
 cp .env.example .env.local
-```
-
-The copy step is optional because safe local defaults are built in. Edit `.env.local`
-when runtime data, configuration, logs, the SQLite file, or the built web directory
-should live elsewhere. Local environment files are ignored by Git.
-
-## Develop
-
-```bash
 pnpm dev
 ```
 
-This migration-first command starts both processes and is suitable for a macOS terminal
-or for Codex CLI to run from the repository root:
+The environment file is optional because safe local defaults are built in. Development
+starts the migration-first API and web processes:
 
 - Web: `http://127.0.0.1:5173`
 - API: `http://127.0.0.1:8787`
 - Health: `http://127.0.0.1:8787/api/health`
 
-Open the web URL to create or edit the local Profile, confirm at least one target role,
-then use Sources to configure and test public ATS boards. Jobs starts all enabled sources
-and shows per-source run status, normalized metadata, and the complete locally stored
-description. The System tab retains API/database health.
+Create and confirm a local Profile with at least one target role. The Sources workspace
+shows JobTech / Platsbanken as the primary source and lets you add selected company career
+pages only when they add useful coverage. Jobs starts enabled sources and displays the
+normalized posting, all source links, merge reasons, lifecycle state, and change history.
 
-Stop both processes with `Ctrl+C`. Use `pnpm dev:api` or `pnpm dev:web` to run only one
-side during focused development.
+Use `Ctrl+C` to stop both processes. `pnpm dev:api` and `pnpm dev:web` run one side during
+focused development.
 
-## Database migrations
+## Source model
 
-Apply all migrations to an empty or existing local database:
+Job Radar intentionally supports only two source types:
 
-```bash
-pnpm db:migrate
-```
+1. JobTech / Platsbanken is created automatically and enabled by default. It uses the
+   official JobSearch API, always applies the Data/IT occupation field, runs each confirmed
+   target role as a separate query, and fetches complete ad details.
+2. A target company page is optional and starts paused. It reads schema.org `JobPosting`
+   JSON-LD from one explicitly configured public HTTPS page.
 
-After changing `packages/db/src/schema.ts`, generate and inspect a migration:
+The target-page connector does not crawl, execute JavaScript, use arbitrary selectors, or
+bypass login, CAPTCHA, access control, or site restrictions. It validates DNS and every
+redirect, pins a validated public address for the request, and rejects unsafe protocols,
+credentials, nonstandard ports, local/private/reserved networks, cloud metadata targets,
+unsafe content types, and oversized responses.
 
-```bash
-pnpm db:generate
-```
+There are no platform-specific ATS adapters or compatibility branches. See
+`docs/connectors.md` for the exact source and safety contract.
 
-Never edit a user database by hand. Database files and their WAL/SHM companions are
-ignored by Git.
+## Job identity and lifecycle
 
-## Profile import substitute
+Matching uses ordered, deterministic evidence:
 
-M1 intentionally has no AI provider. The browser and API accept pasted text or a local
-`.txt`/`.md` file, then a deterministic test substitute reads only exact labeled lines:
+1. same-source external ID;
+2. normalized canonical URL;
+3. company, title, location, and complete-description fingerprint;
+4. company, title, location, and publication day.
 
-```text
-Name: Robin North
-Headline: Fictional product engineer
-Location: Stockholm
-Summary: Builds imaginary local-first tools.
-```
+A cross-source rule applies only when it finds one candidate. Ambiguous postings remain
+separate. Every source link stores the strategy and evidence, and each merge appends an
+explainable audit event. Company, title, location, deadline, or description changes append
+a source-specific immutable snapshot.
 
-The substitute never infers employment, education, skills, languages, authorization, or
-preferences. Extracted basics remain `pending` until the user explicitly confirms them.
-Raw imported source text is hashed but not stored. File imports accept only `text/plain`
-or `text/markdown`, simple file names, and at most 512 KiB.
+Only a complete source scan with no detail failures may advance missing counters. One or
+two misses make an otherwise open job `possibly_closed`; the third closes that source
+link. The aggregate job closes only when all attached source links are closed. A later
+sighting resets the counter and reopens the link and job. Failed, cancelled, capped, and
+detail-partial runs cannot close jobs by absence.
 
-Profile API contracts are exported from `@job-radar/shared`. Primary routes are:
+## Main API routes
+
+Profile:
 
 - `POST`, `GET`, and `PUT /api/profile`
 - `POST /api/profile/confirm`
 - `GET /api/profile/versions` and `GET /api/profile/versions/:version`
-- `GET /api/profile/confirmed` (confirmed facts only)
+- `GET /api/profile/confirmed`
 - `GET` and `PUT /api/preferences`
 - `POST /api/preferences/preview`
 - `POST /api/profile/import` and `POST /api/profile/import/file`
 
-## Structured-source collection
-
-The default source is the official JobTech JobSearch API. User-configured sources support
-the public Greenhouse Job Board API, Lever Postings API (global or EU), and Ashby Job
-Postings API. Teamtailor has limited support through its official JSON API and requires a
-company-issued Public Read token supplied only through a named local environment variable.
-The limited generic connector is explicit opt-in, starts paused, accepts one public HTTPS
-URL, and reads only schema.org `JobPosting` JSON-LD. It validates DNS and every redirect,
-pins the validated public IP for the request, and blocks local/private/reserved/metadata
-addresses, credentials, non-HTTPS schemes, nonstandard ports, oversized bodies, login,
-CAPTCHA, and access-control bypass.
-
-Workday, Jobylon, and SAP SuccessFactors are listed as not supported: their official
-integration paths are tenant-configured or credential/provisioning dependent and do not
-provide a reliable universal public contract. The browser support matrix makes this
-boundary visible instead of presenting an unreliable connector.
-
-The Sources browser workspace can add/configure, test, pause/enable, safely rerun, and
-delete sources. Deletion is soft so historical runs and job provenance remain auditable.
-Each source shows its support level, configuration version, health, a friendly error,
-aggregate counters, and latest run. Fixed-origin connectors accept only a board/site
-identifier; only the deliberately limited generic connector accepts a URL.
-
-Jobs are matched in deterministic order: same-source external ID, normalized canonical
-URL, exact normalized full-description fingerprint with company/title/location, then a
-unique company/title/location/publication-date key. Ambiguous candidates stay separate.
-Every merge stores its strategy and explanation. Material description, location, deadline,
-title, or company changes append a source-specific snapshot. A complete successful source
-scan increments misses; three consecutive misses close that source link. Failed,
-cancelled, incomplete, or detail-partial runs do not advance misses, another open source
-keeps the merged job open, and a later sighting reopens it.
-
-Primary M2 routes are:
+Sources and jobs:
 
 - `GET` and `POST /api/sources`
-- `GET /api/source-capabilities`
 - `PATCH` and `DELETE /api/sources/:id`
 - `POST /api/sources/:id/test` and `POST /api/sources/:id/rerun`
 - `POST /api/scans`, `GET /api/scans`, and `GET /api/scans/:id`
@@ -135,33 +97,44 @@ Primary M2 routes are:
 - `GET /api/jobs` and `GET /api/jobs/:id`
 - `POST /api/jobs/reprocess`
 
-Default tests use fixed fictional JSON and never require network access. See
-`docs/connectors.md` for each connector's exact public endpoint, support limits, lifecycle
-safety, and the reusable connector contract test kit.
+All request and response boundaries use shared Zod contracts.
+
+## Database migrations
+
+```bash
+pnpm db:migrate
+```
+
+Migration `0005_sweden_source_cleanup.sql` enforces the two-source model. Pure JobTech and
+target-page databases retain their collection history. If an old database contains a
+removed source type, reproducible collection state is reset and unsupported source rows
+are deleted; Profile/version history is untouched. This is an intentional clean break,
+not a compatibility layer.
+
+After changing `packages/db/src/schema.ts`, generate and review a migration:
+
+```bash
+pnpm db:generate
+```
+
+Database files and their WAL/SHM companions are ignored by Git.
 
 ## Quality checks
 
 ```bash
-pnpm lint
+pnpm check
 pnpm format:check
-pnpm typecheck
-pnpm test
-pnpm build
 ```
 
-Run the complete project gate with `pnpm check`. Tests use temporary SQLite databases
-and contain only fictional/system data. The web suite covers Profile versioning, the Jobs
-list/detail and scan trigger, plus the complete Sources management flow.
+`pnpm check` runs lint, typecheck, offline tests, package builds, the Vite production
+build, and the Fastify bundle. `docs/testing.md` describes the deterministic coverage.
 
-## Production-style local run
+For a production-style loopback-only run:
 
 ```bash
 pnpm build
 pnpm start
 ```
 
-Fastify applies migrations, serves the built React assets, and listens on
-`http://127.0.0.1:8787`. The host is intentionally loopback-only by default.
-
-See `docs/implementation-status.md`, `docs/decisions.md`, and `docs/testing.md` for the
-handoff state and extension points.
+See `docs/implementation-status.md` and `docs/decisions.md` for the current handoff state
+and architectural boundaries.

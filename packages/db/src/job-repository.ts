@@ -3,22 +3,18 @@ import { createHash, randomUUID } from 'node:crypto';
 import { and, asc, desc, eq, inArray, isNull, like, or, sql } from 'drizzle-orm';
 
 import {
-  ashbySourceConfigSchema,
   canonicalizeJobUrl,
   compositeJobIdentity,
   genericWebSourceConfigSchema,
-  greenhouseSourceConfigSchema,
   jobDetailSchema,
   jobSummarySchema,
   jobTechSourceConfigSchema,
-  leverSourceConfigSchema,
   normalizeDescription,
   normalizeIdentityText,
   scanRunSchema,
   sourceSchema,
-  sourceCapabilityForType,
+  sourceSupportForType,
   sourceViewSchema,
-  teamtailorSourceConfigSchema,
   type CreateSourceRequest,
   type JobDetail,
   type JobSummary,
@@ -61,8 +57,9 @@ const DEFAULT_REQUEST_POLICY = {
 export const DEFAULT_JOBTECH_SOURCE_CONFIG = jobTechSourceConfigSchema.parse({
   kind: 'jobtech',
   queryMode: 'confirmed_profile_roles',
-  pageSize: 25,
-  maxPages: 4,
+  occupationField: 'apaJ_2ja_LuF',
+  pageSize: 100,
+  maxPages: 20,
   ...DEFAULT_REQUEST_POLICY,
 });
 
@@ -103,7 +100,7 @@ function hashText(value: string): string {
 }
 
 function sourceFromRow(row: typeof sources.$inferSelect): Source {
-  const capability = sourceCapabilityForType(row.type);
+  const capability = sourceSupportForType(row.type);
   return sourceSchema.parse({
     id: row.id,
     type: row.type,
@@ -200,7 +197,7 @@ export class JobRepository {
       .select()
       .from(sources)
       .where(isNull(sources.deletedAt))
-      .orderBy(sources.name)
+      .orderBy(sql`case when ${sources.type} = 'jobtech' then 0 else 1 end`, sources.name)
       .all()
       .map(sourceFromRow);
   }
@@ -216,87 +213,7 @@ export class JobRepository {
 
   public createSource(input: CreateSourceRequest, now = new Date()): Source {
     const id = randomUUID();
-    const common = { ...DEFAULT_REQUEST_POLICY };
-    let values: Pick<
-      typeof sources.$inferInsert,
-      'type' | 'baseUrl' | 'config' | 'enabled'
-    >;
-    if (input.type === 'greenhouse') {
-      values = {
-        type: input.type,
-        baseUrl: 'https://boards-api.greenhouse.io',
-        enabled: true,
-        config: greenhouseSourceConfigSchema.parse({
-          kind: 'greenhouse',
-          boardToken: input.identifier,
-          companyName: input.companyName,
-          ...common,
-        }),
-      };
-    } else if (input.type === 'lever') {
-      values = {
-        type: input.type,
-        baseUrl:
-          input.region === 'eu' ? 'https://api.eu.lever.co' : 'https://api.lever.co',
-        enabled: true,
-        config: leverSourceConfigSchema.parse({
-          kind: 'lever',
-          site: input.identifier,
-          companyName: input.companyName,
-          region: input.region,
-          pageSize: 50,
-          maxPages: 20,
-          ...common,
-        }),
-      };
-    } else if (input.type === 'ashby') {
-      values = {
-        type: input.type,
-        baseUrl: 'https://api.ashbyhq.com',
-        enabled: true,
-        config: ashbySourceConfigSchema.parse({
-          kind: 'ashby',
-          boardName: input.identifier,
-          companyName: input.companyName,
-          includeCompensation: input.includeCompensation,
-          ...common,
-        }),
-      };
-    } else if (input.type === 'teamtailor') {
-      const origins = {
-        eu: 'https://api.teamtailor.com',
-        na: 'https://api.na.teamtailor.com',
-        au: 'https://api.au.teamtailor.com',
-      } as const;
-      values = {
-        type: input.type,
-        baseUrl: origins[input.region],
-        enabled: false,
-        config: teamtailorSourceConfigSchema.parse({
-          kind: 'teamtailor',
-          companyName: input.companyName,
-          region: input.region,
-          apiTokenEnv: input.apiTokenEnv,
-          pageSize: 30,
-          maxPages: 20,
-          ...common,
-        }),
-      };
-    } else {
-      const startUrl = canonicalizeJobUrl(input.startUrl);
-      values = {
-        type: input.type,
-        baseUrl: startUrl,
-        enabled: false,
-        config: genericWebSourceConfigSchema.parse({
-          kind: 'generic_web',
-          companyName: input.companyName,
-          startUrl,
-          maxPostings: 200,
-          ...common,
-        }),
-      };
-    }
+    const startUrl = canonicalizeJobUrl(input.startUrl);
 
     const conflict = this.client.db
       .select({ id: sources.id })
@@ -320,11 +237,20 @@ export class JobRepository {
       .insert(sources)
       .values({
         id,
+        type: 'generic_web',
         name: input.name,
+        baseUrl: startUrl,
+        enabled: false,
+        config: genericWebSourceConfigSchema.parse({
+          kind: 'generic_web',
+          companyName: input.companyName,
+          startUrl,
+          maxPostings: 200,
+          ...DEFAULT_REQUEST_POLICY,
+        }),
         healthStatus: 'unknown',
         createdAt: now,
         updatedAt: now,
-        ...values,
       })
       .run();
     return this.getSource(id)!;
@@ -341,14 +267,10 @@ export class JobRepository {
     }
 
     if (
-      (input.region !== undefined &&
-        current.config.kind !== 'lever' &&
-        current.config.kind !== 'teamtailor') ||
-      (input.includeCompensation !== undefined && current.config.kind !== 'ashby') ||
-      (input.apiTokenEnv !== undefined && current.config.kind !== 'teamtailor') ||
-      (input.startUrl !== undefined && current.config.kind !== 'generic_web') ||
-      ((input.companyName !== undefined || input.identifier !== undefined) &&
-        current.config.kind === 'jobtech')
+      current.config.kind === 'jobtech' &&
+      (input.name !== undefined ||
+        input.startUrl !== undefined ||
+        input.companyName !== undefined)
     ) {
       throw new SourceRepositoryError(
         'SOURCE_INVALID_UPDATE',
@@ -358,47 +280,7 @@ export class JobRepository {
 
     let config = current.config;
     let baseUrl = current.baseUrl;
-    if (config.kind === 'greenhouse') {
-      config = greenhouseSourceConfigSchema.parse({
-        ...config,
-        ...(input.companyName ? { companyName: input.companyName } : {}),
-        ...(input.identifier ? { boardToken: input.identifier } : {}),
-      });
-    } else if (config.kind === 'lever') {
-      const region = input.region ?? config.region;
-      config = leverSourceConfigSchema.parse({
-        ...config,
-        region,
-        ...(input.companyName ? { companyName: input.companyName } : {}),
-        ...(input.identifier ? { site: input.identifier } : {}),
-      });
-      baseUrl = region === 'eu' ? 'https://api.eu.lever.co' : 'https://api.lever.co';
-    } else if (config.kind === 'ashby') {
-      config = ashbySourceConfigSchema.parse({
-        ...config,
-        ...(input.companyName ? { companyName: input.companyName } : {}),
-        ...(input.identifier ? { boardName: input.identifier } : {}),
-        ...(input.includeCompensation === undefined
-          ? {}
-          : { includeCompensation: input.includeCompensation }),
-      });
-    } else if (config.kind === 'teamtailor') {
-      const region =
-        input.region === 'eu' || input.region === 'na' || input.region === 'au'
-          ? input.region
-          : config.region;
-      config = teamtailorSourceConfigSchema.parse({
-        ...config,
-        region,
-        ...(input.companyName ? { companyName: input.companyName } : {}),
-        ...(input.apiTokenEnv ? { apiTokenEnv: input.apiTokenEnv } : {}),
-      });
-      baseUrl = {
-        eu: 'https://api.teamtailor.com',
-        na: 'https://api.na.teamtailor.com',
-        au: 'https://api.au.teamtailor.com',
-      }[region];
-    } else if (config.kind === 'generic_web') {
+    if (config.kind === 'generic_web') {
       const startUrl = input.startUrl
         ? canonicalizeJobUrl(input.startUrl)
         : config.startUrl;
@@ -408,17 +290,6 @@ export class JobRepository {
         ...(input.companyName ? { companyName: input.companyName } : {}),
       });
       baseUrl = startUrl;
-    }
-
-    if (
-      config.kind === 'lever' &&
-      input.region &&
-      !['global', 'eu'].includes(input.region)
-    ) {
-      throw new SourceRepositoryError(
-        'SOURCE_INVALID_UPDATE',
-        'This region does not apply to Lever',
-      );
     }
 
     if (input.name && input.name !== current.name) {
@@ -460,8 +331,15 @@ export class JobRepository {
   }
 
   public deleteSource(sourceId: string, now = new Date()): void {
-    if (!this.getSource(sourceId)) {
+    const source = this.getSource(sourceId);
+    if (!source) {
       throw new SourceRepositoryError('SOURCE_NOT_FOUND', 'Source does not exist');
+    }
+    if (source.type === 'jobtech') {
+      throw new SourceRepositoryError(
+        'SOURCE_INVALID_UPDATE',
+        'The primary JobTech source cannot be deleted',
+      );
     }
     this.client.db
       .update(sources)

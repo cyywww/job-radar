@@ -17,8 +17,19 @@
   "workplace_address": {
     "city": "Stockholm",
     "municipality": "Stockholm",
+    "municipality_code": "0180",
+    "municipality_concept_id": "fixture-stockholm-municipality",
     "region": "Stockholms län",
+    "region_code": "01",
+    "region_concept_id": "fixture-stockholm-region",
     "country": "Sweden"
+  },
+  "occupation_group": {
+    "concept_id": "fixture-software-developers",
+    "label": "Mjukvaru- och systemutvecklare"
+  },
+  "must_have": {
+    "languages": [{ "concept_id": "fixture-english", "label": "Engelska" }]
   },
   "publication_date": "2026-08-25T08:15:00+00:00",
   "removed": false,

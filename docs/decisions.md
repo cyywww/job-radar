@@ -106,7 +106,7 @@ boundary consistent without duplicating policy code.
 discovers summaries, fetches complete details, and returns `NormalizedJob`; it never reads
 Profile tables or writes SQLite. The API scan coordinator supplies confirmed-role queries,
 cancellation, and retry accounting, while `JobRepository` owns identity and persistence.
-This keeps later ATS adapters reusable without copying orchestration or privacy policy.
+This keeps source adapters reusable without copying orchestration or privacy policy.
 
 ## ADR-016: material normalized content identifies source-specific snapshots
 
@@ -143,13 +143,14 @@ substitute for JobTech Taxonomy geographic IDs. Structured location mapping is d
 the stored job location and complete confirmed preferences remain available for that
 adapter improvement and later deterministic Gates.
 
-## ADR-020: public ATS configuration selects fixed official origins
+## ADR-020: Swedish coverage uses one broad source and selected company pages
 
-Greenhouse, Lever, and Ashby sources accept a bounded board/site identifier and company
-label rather than an arbitrary base URL. The server selects the official public JSON
-origin (including Lever global/EU). This keeps the browser workflow simple and avoids
-turning source testing into a general-purpose SSRF client. The current connectors use no
-credentials, HTML scraping, login bypass, or CAPTCHA handling.
+JobTech / Platsbanken is the only automatic broad-market source and always applies the
+official Data/IT occupation field. A user may add one-page company career sources when
+they provide useful supplemental coverage. Those sources start paused and accept only
+schema.org `JobPosting` JSON-LD. Platform-specific adapters are intentionally absent so
+the application does not accumulate configuration, fixtures, and UI branches for sources
+that do not materially improve this user's Swedish search.
 
 ## ADR-021: one shared transport policy classifies connector failures
 
@@ -166,20 +167,20 @@ queries hide deleted rows, but SourceRuns, JobSources, snapshots, and historical
 views remain valid. The active source name uniqueness constraint is partial so a deleted
 configuration can later be recreated deliberately.
 
-## ADR-023: ATS fields stay on source records and raw snapshots
+## ADR-023: source-specific fields stay on source records and raw snapshots
 
 `NormalizedJob` has a source-metadata boundary in addition to the complete raw detail.
-JobSource stores the bounded ATS metadata JSON while JobSnapshot stores the full parsed
+JobSource stores bounded source metadata JSON while JobSnapshot stores the full parsed
 detail wrapper. Core Job fields remain source-neutral. Normal job APIs expose only that
 source metadata and the raw response were stored, never the raw objects themselves.
 
-## ADR-024: cross-source matching starts with exact complete-content evidence
+## ADR-024: cross-source matching uses ordered exact evidence
 
-A new source link can merge with an existing Job only when normalized company, title,
-location, and complete plain-text description all match. Per-source identity remains
-`(source_id, source_job_id)`, and canonical keys are source-scoped. This is intentionally
-more conservative than fuzzy title matching; broader similarity matching requires a
-separate reviewed policy and eval set.
+Per-source identity remains `(source_id, source_job_id)`. Cross-source matching then tries
+canonical URL, normalized company/title/location plus complete-description fingerprint,
+and unique company/title/location/publication day. A rule applies only to one candidate;
+ambiguity keeps jobs separate. This is intentionally more conservative than fuzzy title
+matching, which requires a separate reviewed policy and eval set.
 
 ## ADR-025: source metrics are derived from durable runs
 
@@ -188,20 +189,13 @@ SourceRun rows and returns the latest SourceRun alongside Source health. No para
 in-memory metrics store is introduced. Metrics therefore remain consistent with audit
 history and survive restarts at local scale.
 
-## ADR-026: connector support is an explicit product contract
+## ADR-026: source support is an exact two-type contract
 
-Every planned source appears in one shared capability catalog as `supported`, `limited`,
-or `not_supported`. Supported sources have a reviewed stable public contract. Limited
-sources are configurable but start paused and expose the additional operational boundary.
-Workday, Jobylon, and SAP SuccessFactors remain non-configurable because their official
-integration paths are tenant-specific, credentialed, or provisioned and do not establish
-a reliable universal public jobs contract. This is preferable to encoding undocumented
-tenant URLs as apparent platform support.
-
-Teamtailor is limited because its official JSON API requires a company-admin-issued Public
-Read token. The configuration persists only the environment-variable name, never the
-token. Generic web is also limited and explicit opt-in; it recognizes only schema.org
-`JobPosting` JSON-LD on one page.
+The shared contract accepts only `jobtech` and `generic_web`. JobTech is supported and
+enabled by default. Generic web represents a selected one-page company career source; it
+is limited, explicitly configured, and paused by default. Unknown source types fail
+validation rather than falling through to a compatibility path. The browser explains
+these two levels directly and has no catalog of unavailable platforms.
 
 ## ADR-027: user-configured web URLs are resolved and pinned before fetching
 
@@ -258,3 +252,12 @@ merge explanations repeatable, bounds aggregate upstream load, and avoids compet
 SQLite mutation streams. The durable active-scan guard prevents overlapping scans; wider
 parallelism can be reconsidered with the later scheduler/queue and an explicit
 deterministic commit stage.
+
+## ADR-032: source contraction resets reproducible collection state
+
+The Sweden-first migration upgrades valid JobTech configuration in place. If any removed
+source type exists, it clears job/source run state, snapshots, links, jobs, and merge
+events before deleting unsupported sources. Keeping partial history would require dead
+configuration contracts and could leave misleading provenance. Collection data can be
+scanned again; immutable candidate Profile/version history is unrelated and remains
+untouched.

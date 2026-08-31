@@ -1,15 +1,12 @@
 import { describe, expect, it } from 'vitest';
 
 import {
-  ashbySourceConfigSchema,
   createSourceRequestSchema,
-  greenhouseSourceConfigSchema,
+  genericWebSourceConfigSchema,
   jobTechSourceConfigSchema,
-  leverSourceConfigSchema,
   normalizedJobSchema,
   scanRunSchema,
-  sourceCapabilities,
-  teamtailorSourceConfigSchema,
+  sourceSupportForType,
 } from './jobs.js';
 import {
   canonicalizeJobUrl,
@@ -33,6 +30,7 @@ describe('job collection contracts', () => {
       jobTechSourceConfigSchema.parse({
         kind: 'jobtech',
         queryMode: 'confirmed_profile_roles',
+        occupationField: 'apaJ_2ja_LuF',
         pageSize: 101,
         maxPages: 1,
         detailConcurrency: 1,
@@ -46,41 +44,22 @@ describe('job collection contracts', () => {
     ).toThrow();
   });
 
-  it('keeps each ATS identifier and request policy strictly bounded', () => {
+  it('keeps the optional target-company page explicit and HTTPS-only', () => {
     expect(
-      greenhouseSourceConfigSchema.parse({
-        kind: 'greenhouse',
-        boardToken: 'northstar-example',
+      genericWebSourceConfigSchema.parse({
+        kind: 'generic_web',
+        startUrl: 'https://careers.example.test/jobs',
         companyName: 'Northstar Example AB',
+        maxPostings: 100,
         ...requestPolicy,
-      }).boardToken,
-    ).toBe('northstar-example');
-    expect(
-      leverSourceConfigSchema.parse({
-        kind: 'lever',
-        site: 'northstar-example',
-        companyName: 'Northstar Example AB',
-        region: 'eu',
-        pageSize: 50,
-        maxPages: 10,
-        ...requestPolicy,
-      }).region,
-    ).toBe('eu');
-    expect(
-      ashbySourceConfigSchema.parse({
-        kind: 'ashby',
-        boardName: 'northstar-example',
-        companyName: 'Northstar Example AB',
-        includeCompensation: true,
-        ...requestPolicy,
-      }).includeCompensation,
-    ).toBe(true);
+      }).startUrl,
+    ).toBe('https://careers.example.test/jobs');
     expect(() =>
       createSourceRequestSchema.parse({
-        type: 'ashby',
-        name: 'Unsafe path fixture',
+        type: 'generic_web',
+        name: 'Unsafe target page',
         companyName: 'Northstar Example AB',
-        identifier: '../private-board',
+        startUrl: 'http://127.0.0.1/jobs',
       }),
     ).toThrow();
   });
@@ -107,31 +86,10 @@ describe('job collection contracts', () => {
     ).toThrow();
   });
 
-  it('records reviewed support levels for every planned source', () => {
-    const levels = Object.fromEntries(
-      sourceCapabilities.capabilities.map((capability) => [
-        capability.type,
-        capability.supportLevel,
-      ]),
-    );
-    expect(levels).toMatchObject({
-      teamtailor: 'limited',
-      workday: 'not_supported',
-      jobylon: 'not_supported',
-      successfactors: 'not_supported',
-      generic_web: 'limited',
-    });
-    expect(
-      teamtailorSourceConfigSchema.parse({
-        kind: 'teamtailor',
-        companyName: 'Northstar Example AB',
-        region: 'eu',
-        apiTokenEnv: 'JOB_RADAR_TEAMTAILOR_TOKEN',
-        pageSize: 30,
-        maxPages: 10,
-        ...requestPolicy,
-      }).apiTokenEnv,
-    ).toBe('JOB_RADAR_TEAMTAILOR_TOKEN');
+  it('exposes only the Sweden-first source model', () => {
+    expect(sourceSupportForType('jobtech').supportLevel).toBe('supported');
+    expect(sourceSupportForType('generic_web').supportLevel).toBe('limited');
+    expect(() => sourceSupportForType('removed_source')).toThrow();
   });
 
   it('does not accept an untracked scan state', () => {

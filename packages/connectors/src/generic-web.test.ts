@@ -87,7 +87,7 @@ describe('GenericWebConnector', () => {
   });
 });
 
-describe('generic web SSRF policy', () => {
+describe('target company page SSRF policy', () => {
   it.each([
     'http://careers.public-example.com/jobs',
     'https://localhost/jobs',
@@ -129,7 +129,7 @@ describe('generic web SSRF policy', () => {
     const scanContext = context(source());
     await expect(
       client.requestHtml(
-        'Generic web',
+        'Target company page',
         scanContext.source.baseUrl,
         scanContext.source.config,
         scanContext,
@@ -144,7 +144,7 @@ describe('generic web SSRF policy', () => {
     });
     await expect(
       dnsClient.requestHtml(
-        'Generic web',
+        'Target company page',
         scanContext.source.baseUrl,
         scanContext.source.config,
         scanContext,
@@ -165,7 +165,7 @@ describe('generic web SSRF policy', () => {
     const scanContext = context(source());
     await expect(
       client.requestHtml(
-        'Generic web',
+        'Target company page',
         scanContext.source.baseUrl,
         scanContext.source.config,
         scanContext,
@@ -189,7 +189,7 @@ describe('generic web SSRF policy', () => {
     const client = new SafeWebClient({ resolve, fetch: fetchMock });
     const scanContext = context(source());
     await client.requestHtml(
-      'Generic web',
+      'Target company page',
       scanContext.source.baseUrl,
       scanContext.source.config,
       scanContext,

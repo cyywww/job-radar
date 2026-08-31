@@ -140,7 +140,10 @@ export function isPublicAddress(address: string): boolean {
 export function assertSafePublicHttpsUrl(value: string | URL): URL {
   const url = value instanceof URL ? new URL(value) : new URL(value);
   if (url.protocol !== 'https:') {
-    throw new ConnectorRequestError('Generic web URLs must use HTTPS', 'unsafe_url');
+    throw new ConnectorRequestError(
+      'Target company page URLs must use HTTPS',
+      'unsafe_url',
+    );
   }
   if (url.username || url.password) {
     throw new ConnectorRequestError('URL credentials are not allowed', 'unsafe_url');
@@ -185,7 +188,7 @@ async function readBoundedHtml(response: Response): Promise<string> {
   const declared = Number(response.headers.get('content-length'));
   if (Number.isFinite(declared) && declared > MAX_HTML_BYTES) {
     throw new ConnectorRequestError(
-      'Generic web response exceeded the 2 MiB safety limit',
+      'Target company page response exceeded the 2 MiB safety limit',
       'invalid_response',
     );
   }
@@ -200,7 +203,7 @@ async function readBoundedHtml(response: Response): Promise<string> {
     if (total > MAX_HTML_BYTES) {
       await reader.cancel();
       throw new ConnectorRequestError(
-        'Generic web response exceeded the 2 MiB safety limit',
+        'Target company page response exceeded the 2 MiB safety limit',
         'invalid_response',
       );
     }

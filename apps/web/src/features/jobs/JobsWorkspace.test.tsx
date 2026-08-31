@@ -94,6 +94,7 @@ const source: SourceView = {
   config: {
     kind: 'jobtech',
     queryMode: 'confirmed_profile_roles',
+    occupationField: 'apaJ_2ja_LuF',
     pageSize: 25,
     maxPages: 4,
     detailConcurrency: 4,

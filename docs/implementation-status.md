@@ -1,138 +1,102 @@
 # Implementation status
 
-Last updated: 2026-08-31
+Last updated: 2026-09-01
 
 ## Current milestone
 
-The M2 planned-source, identity, and lifecycle hardening slice is complete. JobTech,
-Greenhouse, Lever, and Ashby remain fully supported. Teamtailor and one-page generic
-schema.org JSON-LD collection are deliberately limited and disabled until explicitly
-configured and enabled. Workday, Jobylon, and SAP SuccessFactors are explicitly reported
-as not supported rather than implemented through unstable tenant-specific endpoints.
+The M2 collection, deterministic identity, and lifecycle slice is complete and Sweden
+first. The project has one broad source—JobTech / Platsbanken—and one deliberately narrow
+supplement: an explicitly configured target-company page with valid schema.org
+`JobPosting` JSON-LD.
 
-Jobs now have deterministic and explainable cross-source identity, per-source immutable
-change history, first/last/changed timestamps, aggregate open/possibly-closed/closed state,
-three-complete-scan missing closure, source-failure isolation, reopening, safe
-reprocessing, configuration-versioned reruns, and database-backed duplicate scan guards.
+Platform-specific ATS adapters and their configuration/UI/test branches have been deleted.
+The application does not advertise support for code it does not contain.
 
-## Connector support status
+## Source coverage
 
-| Connector          | Status        | Supported scope                                                     | Deliberate limits                                                                                |
-| ------------------ | ------------- | ------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------ |
-| JobTech            | Supported     | Confirmed-role discovery, offset paging, complete `/ad/{id}` detail | No taxonomy/location ID mapping yet.                                                             |
-| Greenhouse         | Supported     | Official unauthenticated board list/detail JSON                     | Non-paginated list; employment type unavailable; configured company fallback.                    |
-| Lever              | Supported     | Official global/EU Postings list/detail JSON and skip/limit paging  | Configured company; no public deadline.                                                          |
-| Ashby              | Supported     | Official complete public board JSON with embedded descriptions      | Unlisted posts excluded; configured company; no public deadline.                                 |
-| Teamtailor         | Limited       | Official regional JSON:API list/detail and location relationship    | Company-admin Public Read token required by environment-variable name; starts paused.            |
-| Workday            | Not supported | Capability/reason visible; no configurable connector                | External sites vary by tenant; documented service reports require customer configuration.        |
-| Jobylon            | Not supported | Capability/reason visible; no configurable connector                | Official feed is provisioned to customers/integration partners; no universal anonymous contract. |
-| SAP SuccessFactors | Not supported | Capability/reason visible; no configurable connector                | Recruiting APIs require tenant permissions/credentials.                                          |
-| Generic web        | Limited       | One public HTTPS page; valid schema.org `JobPosting` JSON-LD only   | Explicit opt-in and paused; no crawl/selectors/JS/login/CAPTCHA/bypass.                          |
+| Source                | Level     | Scope                                                                                                      | Boundary                                                                                                                 |
+| --------------------- | --------- | ---------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------ |
+| JobTech / Platsbanken | Supported | Official Swedish JobSearch API; Data/IT occupation field; one query per confirmed role; complete ad detail | Up to 100 results × 20 pages per role; structured location taxonomy is retained but Profile location mapping is deferred |
+| Target company page   | Limited   | One public HTTPS page with schema.org `JobPosting` JSON-LD                                                 | Paused until enabled; no crawl, selectors, JavaScript, login, CAPTCHA, bypass, or authenticated postings                 |
 
-All implemented connectors have strict Zod boundaries, explicit User-Agent, abortable
-timeout/retry controls, safe errors, and fictional offline fixtures. URL-configured generic
-web additionally enforces DNS-aware SSRF and redirect protections, public-IP pinning,
-HTTPS/port/content/size limits, and metadata/private/reserved address denial.
+The target-page transport validates and pins public DNS results, revalidates redirects,
+and denies unsafe schemes, credentials, ports, local/private/reserved/metadata addresses,
+unsafe content types, and oversized bodies.
 
-## Completed
+## Completed behavior
 
-- Added a shared support catalog and `GET /api/source-capabilities`; browser users see the
-  level, default state, configurability, and reason for every planned source.
-- Added `TeamtailorConnector` for its official EU/NA/AU JSON:API. The database stores only
-  the configured token environment-variable name, and the source starts disabled.
-- Added an explicitly enabled generic JSON-LD connector with pre-connect and per-redirect
-  SSRF validation, public DNS/IP pinning, response bounds, and no arbitrary selectors or
-  browser execution.
-- Added deterministic identity helpers for canonical URLs, normalized identity text,
-  normalized descriptions, full-description SHA-256 fingerprints, and publication-day
-  composite keys.
-- Implemented ordered unique matching by same-source external ID, canonical URL,
-  company/title/location/full-description fingerprint, and
+- JobTech is the only automatic source. It always uses occupation-field
+  `apaJ_2ja_LuF`, sends confirmed roles separately, respects the 2,000-result search
+  window, and retains occupation group, municipality identifiers, and required languages
+  as structured source metadata.
+- Target company pages can be added, tested, edited, enabled/paused, rerun, and soft
+  deleted. They start paused and accept only an explicit HTTPS page.
+- URL canonicalization removes credentials, fragments, default ports, and known tracking
+  parameters, then normalizes host/path and sorts retained query parameters.
+- Identity matching is ordered: same-source external ID, canonical URL, exact normalized
+  description fingerprint with company/title/location, then unique
   company/title/location/publication day. Ambiguous candidates remain separate.
-- Added per-source match strategy/evidence and append-only cross-source merge events so the
-  job detail can explain every link.
-- Made snapshots source-specific and material: description, location, deadline, title, or
-  company changes append a snapshot with explicit changed fields; unchanged repeats do
-  not. Raw payloads remain local and hidden from normal APIs.
-- Added job/link first seen, last seen, and last changed semantics. One or two complete-run
-  misses produce `possibly_closed`; the third closes a link; a later sighting reopens it.
-  Failed, cancelled, incomplete, or detail-partial runs cannot advance misses, and another
-  live source keeps the aggregate job open.
-- Added safe normalization reprocessing through `POST /api/jobs/reprocess`. It can merge
-  only unambiguous disjoint-source jobs transactionally and asserts that snapshot history
-  is neither dropped nor duplicated.
-- Added monotonically increasing source `config_version`, captured by each SourceRun, plus
-  `POST /api/sources/:id/rerun` for the current version.
-- Added a partial unique SQLite active-scan constraint and transactional guard. Browser
-  double-clicks/concurrent requests cannot create overlapping queued/running scans, and
-  reprocessing refuses to overlap an active scan.
-- Expanded Jobs browser detail with every source, merge explanation, per-source state,
-  open/possibly-closed/closed aggregate status, discovery/change timestamps, source health
-  and errors, run config versions, and change history.
-- Added generated and reviewed migration `0004_windy_mongu.sql`, including explicit
-  backfills for an already populated database at the previous migration.
+- `jobs`, `job_sources`, `job_snapshots`, and append-only merge events preserve aggregate
+  identity, every source link, immutable material changes, and the reason a merge occurred.
+- Jobs and links track first seen, last seen, and last changed timestamps. Description,
+  company, title, location, or deadline changes append a source-specific snapshot.
+- Only complete, detail-successful source scans advance misses. One or two misses produce
+  `possibly_closed`; the third closes the link. Another open source keeps the aggregate
+  job open, and a later observation reopens it.
+- Reprocessing recomputes current identity under the latest normalization rules without
+  deleting snapshots. Source configuration versions make safe reruns auditable.
+- A database partial unique index plus transactional preflight prevents duplicate
+  queued/running scans. Sources run in stable order and bound their detail concurrency.
+- The browser shows source health/errors/metrics, latest run, all job sources, merge
+  explanations, lifecycle state, timestamps, and change history.
 
-## Deliberately not implemented
+## Clean-break migration
 
-- Workday, Jobylon, and SuccessFactors tenant-specific/credentialed integration paths.
-  Their reasons remain visible as `not_supported`; there is no fragile placeholder code.
-- Arbitrary HTML selectors, multi-page crawling, JavaScript rendering, login/CAPTCHA/
-  access-control bypass, authenticated internal postings, or application submission.
-- Broad fuzzy/AI-assisted cross-source matching. Deterministic rules require a unique
-  candidate; uncertain jobs remain separate.
-- AI extraction, eligibility Gates, scoring, ranking, rescore queues, or evals.
-- Daily scheduling, service management, notifications, crash recovery, backups, or the
-  project CLI.
-- Applications, triage, feedback, or automated application behavior.
+Migration `0005_sweden_source_cleanup.sql` upgrades JobTech to the fixed Sweden Data/IT
+configuration. If a database contains only current source types, source and snapshot
+history is retained. If it contains a removed source type, all reproducible collection
+state is reset before that source is deleted so no orphaned provenance or unsupported
+configuration survives. Candidate Profile/version history is not touched.
+
+## Deliberately deferred
+
+- Additional broad job boards or platform-specific adapters.
+- Taxonomy-backed mapping from free-text Profile locations to JobTech municipality IDs.
+- Multi-page crawling, selector scraping, JavaScript rendering, authenticated postings,
+  or access-control bypass.
+- Fuzzy or AI-assisted deduplication.
+- AI extraction, eligibility gates, scoring, ranking, applications, scheduling, and
+  notifications.
 
 ## Verification result
 
-Verified on 2026-08-31 with Node 22.16.0 and pnpm 11.19.0:
+Verified on 2026-09-01 with Node 22 and pnpm 11:
 
-- `pnpm check` passed lint, every workspace TypeScript check, all 98 tests across 21 test
-  files, package builds, the Vite production build, and the Fastify ESM bundle.
-- Test totals are 15 shared, 3 config, 35 connector, 12 database, 28 API, and 5 web tests.
-  The suite uses fictional/system data and does not read the network, normal local
-  database, real Profile, or a secret.
-- Teamtailor and generic-web connector fixtures pass their connector contract. Generic web
-  includes 20 focused parsing/SSRF tests. Support-contract tests cover every planned source
-  and explicitly assert all limited/not-supported levels.
-- Database tests prove deterministic cross-source matches and ambiguous no-merge,
-  explanations, per-source material snapshots, three-miss closure, reopening,
-  incomplete-result non-closure, source-aware aggregate state, versioned config, durable
-  duplicate-scan rejection, repeatable reprocessing, and unchanged snapshot counts.
-- Migration tests apply all five migrations from empty and upgrade a populated database
-  built at migration 0003. The independent disposable database returned `ok` from
-  `PRAGMA integrity_check`, no rows from `PRAGMA foreign_key_check`, and exposed the new
-  merge/snapshot/source/run tables and indexes.
-- `pnpm format:check` passed.
-- `pnpm start` migrated first, served the production web bundle and API only on
-  `127.0.0.1:8787`, and returned HTTP 200 for `/`, health, readiness, source capabilities,
-  and all-status jobs. The API ESM build keeps `undici` external as a declared runtime
-  dependency, verified by this real start rather than build output alone.
-- In-app browser acceptance used a disposable database. It verified the nine-source
-  support matrix, limited generic source default-pause behavior, source health/error and
-  config-version display, one explainable two-source merged job, `possibly_closed` state,
-  first/last/changed timestamps, and three immutable snapshots including explicit
-  description/location/deadline changes. Browser warning/error logs were empty.
-- Live network smoke remains optional and was not used for deterministic acceptance.
+- `pnpm check` passed lint, workspace typechecks, 90 tests across 20 files, all package
+  builds, the Vite production build, and the Fastify ESM bundle.
+- Test totals are 15 shared, 3 config, 27 connector, 13 database, 27 API, and 5 web tests.
+- `pnpm format:check` and `git diff --check` passed.
+- Migration tests cover empty creation, populated JobTech history retention/config upgrade,
+  and complete unsupported-source collection cleanup with SQLite integrity and foreign-key
+  checks.
+- Connector fixtures are fictional and offline. JobTech covers filtering, separate-role
+  paging, normalization, metadata, retry/timeout/cancellation/concurrency; target-page
+  tests cover JSON-LD and DNS/redirect/SSRF/content bounds.
+- Repository/API tests cover cross-source fixtures, explainable matches, ambiguity,
+  material snapshots, three misses, reopening, source-failure isolation, partial-detail
+  safety, versioned reruns, duplicate-scan prevention, and history-preserving reprocessing.
+- A production-style loopback runtime served the built web application and returned HTTP
+  200 for health, readiness, sources, and all-status jobs using a disposable database.
 
-## Stable privacy and phase boundaries
+## Stable privacy boundary
 
-- `ProfileRepository.getConfirmedView()` and `GET /api/profile/confirmed` remain the only
-  candidate-data consumption boundary. Pending/rejected facts are not inspected.
-- Connectors receive queries and source configuration but never read Profile tables or
-  write SQLite directly.
-- Complete raw source details remain local in snapshots; normal APIs expose only safe
-  normalized descriptions, audit hashes, changed fields, and storage markers.
-- The server remains loopback-only. Fully supported ATS connectors need no credentials;
-  limited Teamtailor reads a token from the named process environment without persistence.
+`ProfileRepository.getConfirmedView()` and `GET /api/profile/confirmed` remain the only
+candidate-data consumption boundary. Pending/rejected facts stay excluded. Connectors do
+not read Profile tables or write SQLite directly, complete raw details remain local, and
+the server binds to loopback by default.
 
 ## Next phase
 
-The next implementation-plan milestone is the M3 scoring vertical slice. It still needs strict requirement-extraction
-schemas, the replaceable AI Provider boundary (Codex CLI first), deterministic eligibility
-Gates, evidence-linked match/gap output, versioned weighted scoring/ranking, confidence and
-unknown handling, invalid-output audit, pending/retry queues, score invalidation on Profile
-or snapshot changes, and a fictional eval set. It must consume only `ConfirmedProfileView`
-plus normalized Job detail/snapshot data, never raw ATS metadata as candidate evidence.
+M3 may add deterministic eligibility gates and evidence-linked scoring, but it must
+consume only `ConfirmedProfileView` plus normalized job/snapshot data. No AI scoring has
+started in this milestone.

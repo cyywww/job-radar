@@ -53,7 +53,7 @@ export default function App(): React.JSX.Element {
             System
           </button>
         </nav>
-        <span className="phase-label">Public ATS · M2</span>
+        <span className="phase-label">Sweden JobTech · M2</span>
       </header>
       <main>
         {view === 'profile' ? (

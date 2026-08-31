@@ -2,14 +2,10 @@ import type { FastifyBaseLogger } from 'fastify';
 import { ZodError } from 'zod';
 
 import {
-  AshbyConnector,
   ConnectorCancelledError,
   ConnectorRequestError,
-  GreenhouseConnector,
   GenericWebConnector,
   JobTechConnector,
-  LeverConnector,
-  TeamtailorConnector,
   mapWithConcurrency,
   type ConnectorContext,
   type JobConnector,
@@ -106,10 +102,6 @@ export class ScanCoordinator {
     this.now = options.now ?? (() => new Date());
     const connectors = options.connectors ?? [
       new JobTechConnector(),
-      new GreenhouseConnector(),
-      new LeverConnector(),
-      new AshbyConnector(),
-      new TeamtailorConnector(),
       new GenericWebConnector(),
     ];
     this.connectors = new Map(connectors.map((connector) => [connector.type, connector]));

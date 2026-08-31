@@ -29,16 +29,30 @@ function normalized(
     publishedAt: '2026-08-30T08:00:00.000Z',
     deadline: null,
     descriptionText:
-      'The same complete fictional description is published on two ATS boards.',
+      'The same complete fictional description is published on two Sweden sources.',
     descriptionHtml: null,
     sourceUrl: `https://example.test/${source}/jobs/1`,
     canonicalUrl: `https://example.test/${source}/jobs/1`,
     remoteMode: 'hybrid',
     employmentType: 'Full-time',
     sourceActive: true,
-    sourceMetadata: { ats: source },
+    sourceMetadata: { fixtureSource: source },
     rawData: { source, id: `${source}-external-1`, descriptionVersion: 1 },
     ...overrides,
+  });
+}
+
+function targetPage(
+  repository: JobRepository,
+  name: string,
+  slug: string,
+  companyName = 'Northstar Exact Match AB',
+) {
+  return repository.createSource({
+    type: 'generic_web',
+    name,
+    companyName,
+    startUrl: `https://careers.example.test/${slug}`,
   });
 }
 
@@ -48,29 +62,18 @@ describe('JobRepository multi-source identity', () => {
     database = openDatabase(join(directory, 'test.sqlite'));
     runMigrations(database);
     const repository = new JobRepository(database);
-    const greenhouse = repository.createSource({
-      type: 'greenhouse',
-      name: 'Northstar Greenhouse',
-      companyName: 'Northstar Exact Match AB',
-      identifier: 'northstar-greenhouse',
-    });
-    const lever = repository.createSource({
-      type: 'lever',
-      name: 'Northstar Lever',
-      companyName: 'Northstar Exact Match AB',
-      identifier: 'northstar-lever',
-      region: 'global',
-    });
-    const run = repository.createScan(1, [greenhouse, lever], [], new Date());
+    const jobtech = repository.ensureDefaultSources();
+    const companyPage = targetPage(repository, 'Northstar careers', 'northstar');
+    const run = repository.createScan(1, [jobtech, companyPage], [], new Date());
 
     expect(
-      repository.ingestJob(greenhouse, run.id, normalized('greenhouse'), new Date()),
+      repository.ingestJob(jobtech, run.id, normalized('jobtech'), new Date()),
     ).toMatchObject({ outcome: 'created' });
     expect(
-      repository.ingestJob(lever, run.id, normalized('lever'), new Date()),
+      repository.ingestJob(companyPage, run.id, normalized('company-page'), new Date()),
     ).toMatchObject({ outcome: 'updated' });
     expect(
-      repository.ingestJob(lever, run.id, normalized('lever'), new Date()),
+      repository.ingestJob(companyPage, run.id, normalized('company-page'), new Date()),
     ).toMatchObject({ outcome: 'unchanged' });
 
     const list = repository.listJobs({ active: true, search: '', limit: 50, offset: 0 });
@@ -94,32 +97,21 @@ describe('JobRepository multi-source identity', () => {
     database = openDatabase(join(directory, 'test.sqlite'));
     runMigrations(database);
     const repository = new JobRepository(database);
-    const greenhouse = repository.createSource({
-      type: 'greenhouse',
-      name: 'Lifecycle Greenhouse',
-      companyName: 'Northstar Exact Match AB',
-      identifier: 'lifecycle-greenhouse',
-    });
-    const lever = repository.createSource({
-      type: 'lever',
-      name: 'Lifecycle Lever',
-      companyName: 'Northstar Exact Match AB',
-      identifier: 'lifecycle-lever',
-      region: 'global',
-    });
+    const jobtech = repository.ensureDefaultSources();
+    const companyPage = targetPage(repository, 'Lifecycle company page', 'lifecycle');
     const now = new Date('2026-08-31T12:00:00.000Z');
-    const run = repository.createScan(1, [greenhouse, lever], [], now);
+    const run = repository.createScan(1, [jobtech, companyPage], [], now);
 
-    repository.ingestJob(greenhouse, run.id, normalized('greenhouse'), now);
-    repository.ingestJob(lever, run.id, normalized('lever'), now);
+    repository.ingestJob(jobtech, run.id, normalized('jobtech'), now);
+    repository.ingestJob(companyPage, run.id, normalized('company-page'), now);
     repository.ingestJob(
-      lever,
+      companyPage,
       run.id,
-      normalized('lever', {
+      normalized('company-page', {
         sourceActive: false,
         rawData: {
-          source: 'lever',
-          id: 'lever-external-1',
+          source: 'company-page',
+          id: 'company-page-external-1',
           descriptionVersion: 1,
           removed: true,
         },
@@ -131,18 +123,18 @@ describe('JobRepository multi-source identity', () => {
       repository.listJobs({ active: true, search: '', limit: 50, offset: 0 }).total,
     ).toBe(1);
 
-    repository.applyLifecycle(greenhouse, new Set(), true, now);
-    repository.applyLifecycle(greenhouse, new Set(), true, now);
-    repository.applyLifecycle(greenhouse, new Set(), false, now);
+    repository.applyLifecycle(jobtech, new Set(), true, now);
+    repository.applyLifecycle(jobtech, new Set(), true, now);
+    repository.applyLifecycle(jobtech, new Set(), false, now);
     expect(
       repository
         .getJob(
           repository.listJobs({ active: null, search: '', limit: 50, offset: 0 }).jobs[0]!
             .id,
         )
-        ?.sources.find((entry) => entry.sourceId === greenhouse.id)?.consecutiveMisses,
+        ?.sources.find((entry) => entry.sourceId === jobtech.id)?.consecutiveMisses,
     ).toBe(2);
-    expect(repository.applyLifecycle(greenhouse, new Set(), true, now)).toBe(1);
+    expect(repository.applyLifecycle(jobtech, new Set(), true, now)).toBe(1);
     expect(
       repository.listJobs({ active: false, search: '', limit: 50, offset: 0 }).total,
     ).toBe(1);
@@ -153,31 +145,24 @@ describe('JobRepository multi-source identity', () => {
     database = openDatabase(join(directory, 'test.sqlite'));
     runMigrations(database);
     const repository = new JobRepository(database);
-    const greenhouse = repository.createSource({
-      type: 'greenhouse',
-      name: 'Strategy Greenhouse',
-      companyName: 'Strategy Example AB',
-      identifier: 'strategy-greenhouse',
-    });
-    const lever = repository.createSource({
-      type: 'lever',
-      name: 'Strategy Lever',
-      companyName: 'Strategy Example AB',
-      identifier: 'strategy-lever',
-      region: 'global',
-    });
-    const ashby = repository.createSource({
-      type: 'ashby',
-      name: 'Strategy Ashby',
-      companyName: 'Strategy Example AB',
-      identifier: 'strategy-ashby',
-      includeCompensation: false,
-    });
+    const jobtech = repository.ensureDefaultSources();
+    const firstPage = targetPage(
+      repository,
+      'Strategy company page one',
+      'strategy-one',
+      'Strategy Example AB',
+    );
+    const secondPage = targetPage(
+      repository,
+      'Strategy company page two',
+      'strategy-two',
+      'Strategy Example AB',
+    );
     const now = new Date('2026-08-31T12:00:00.000Z');
-    const run = repository.createScan(1, [greenhouse, lever, ashby], [], now);
+    const run = repository.createScan(1, [jobtech, firstPage, secondPage], [], now);
 
     repository.ingestJob(
-      greenhouse,
+      jobtech,
       run.id,
       normalized('url-a', {
         externalId: 'url-a',
@@ -189,7 +174,7 @@ describe('JobRepository multi-source identity', () => {
       now,
     );
     repository.ingestJob(
-      lever,
+      firstPage,
       run.id,
       normalized('url-b', {
         externalId: 'url-b',
@@ -207,7 +192,7 @@ describe('JobRepository multi-source identity', () => {
     );
 
     repository.ingestJob(
-      greenhouse,
+      jobtech,
       run.id,
       normalized('same-source-2', {
         externalId: 'same-source-2',
@@ -223,7 +208,7 @@ describe('JobRepository multi-source identity', () => {
       now,
     );
     repository.ingestJob(
-      lever,
+      firstPage,
       run.id,
       normalized('composite-match', {
         externalId: 'composite-match',
@@ -252,7 +237,7 @@ describe('JobRepository multi-source identity', () => {
         ),
     ).toBe(true);
     repository.ingestJob(
-      greenhouse,
+      jobtech,
       run.id,
       normalized('same-source-3', {
         externalId: 'same-source-3',
@@ -268,7 +253,7 @@ describe('JobRepository multi-source identity', () => {
       now,
     );
     repository.ingestJob(
-      ashby,
+      secondPage,
       run.id,
       normalized('ambiguous', {
         externalId: 'ambiguous',
@@ -287,7 +272,7 @@ describe('JobRepository multi-source identity', () => {
     expect(jobs.total).toBe(4);
 
     repository.requestCancellation(run.id, now);
-    for (const source of [greenhouse, lever, ashby]) {
+    for (const source of [jobtech, firstPage, secondPage]) {
       repository.completeSourceRun(run.id, source.id, {
         status: 'cancelled',
         resultSetComplete: null,
@@ -318,12 +303,7 @@ describe('JobRepository multi-source identity', () => {
     database = openDatabase(join(directory, 'test.sqlite'));
     runMigrations(database);
     const repository = new JobRepository(database);
-    const source = repository.createSource({
-      type: 'greenhouse',
-      name: 'History Greenhouse',
-      companyName: 'Northstar Exact Match AB',
-      identifier: 'history-greenhouse',
-    });
+    const source = repository.ensureDefaultSources();
     const now = new Date('2026-08-31T12:00:00.000Z');
     const run = repository.createScan(1, [source], [], now);
     repository.ingestJob(source, run.id, normalized('history'), now);
@@ -397,25 +377,19 @@ describe('JobRepository multi-source identity', () => {
     database = openDatabase(join(directory, 'test.sqlite'));
     runMigrations(database);
     const repository = new JobRepository(database);
-    const greenhouse = repository.createSource({
-      type: 'greenhouse',
-      name: 'Legacy Greenhouse',
-      companyName: 'Legacy One AB',
-      identifier: 'legacy-greenhouse',
-    });
-    const lever = repository.createSource({
-      type: 'lever',
-      name: 'Legacy Lever',
-      companyName: 'Legacy Two AB',
-      identifier: 'legacy-lever',
-      region: 'global',
-    });
+    const jobtech = repository.ensureDefaultSources();
+    const companyPage = targetPage(
+      repository,
+      'Legacy company page',
+      'legacy',
+      'Legacy Two AB',
+    );
     const now = new Date('2026-08-31T12:00:00.000Z');
-    const run = repository.createScan(1, [greenhouse, lever], [], now);
+    const run = repository.createScan(1, [jobtech, companyPage], [], now);
     repository.ingestJob(
-      greenhouse,
+      jobtech,
       run.id,
-      normalized('legacy-greenhouse', {
+      normalized('legacy-jobtech', {
         company: 'Legacy One AB',
         title: 'Fictional Legacy Role One',
         canonicalUrl: 'https://old-one.example.test/jobs/1',
@@ -425,9 +399,9 @@ describe('JobRepository multi-source identity', () => {
       now,
     );
     repository.ingestJob(
-      lever,
+      companyPage,
       run.id,
-      normalized('legacy-lever', {
+      normalized('legacy-company-page', {
         company: 'Legacy Two AB',
         title: 'Fictional Legacy Role Two',
         canonicalUrl: 'https://old-two.example.test/jobs/2',
@@ -436,7 +410,7 @@ describe('JobRepository multi-source identity', () => {
       }),
       now,
     );
-    for (const source of [greenhouse, lever]) {
+    for (const source of [jobtech, companyPage]) {
       repository.completeSourceRun(run.id, source.id, {
         status: 'succeeded',
         resultSetComplete: true,
@@ -477,7 +451,7 @@ describe('JobRepository multi-source identity', () => {
       .prepare('update job_sources set source_url = ? where source_id = ?')
       .run(
         'HTTPS://Careers.Example.test:443//jobs/legacy/?utm_source=old#apply',
-        greenhouse.id,
+        jobtech.id,
       );
 
     const result = repository.reprocessJobs(new Date('2026-09-01T12:00:00.000Z'));
@@ -505,12 +479,12 @@ describe('JobRepository multi-source identity', () => {
     database = openDatabase(join(directory, 'test.sqlite'));
     runMigrations(database);
     const repository = new JobRepository(database);
-    const source = repository.createSource({
-      type: 'greenhouse',
-      name: 'Versioned Greenhouse',
-      companyName: 'Versioned Example AB',
-      identifier: 'versioned-greenhouse',
-    });
+    const source = targetPage(
+      repository,
+      'Versioned company page',
+      'versioned-one',
+      'Versioned Example AB',
+    );
     const first = repository.createScan(1, [source], [], new Date());
     expect(() => repository.createScan(1, [source], [], new Date())).toThrow(
       ScanAlreadyActiveError,
@@ -535,7 +509,7 @@ describe('JobRepository multi-source identity', () => {
     });
     repository.completeScan(first.id, new Date());
     const updated = repository.updateSource(source.id, {
-      identifier: 'versioned-greenhouse-v2',
+      startUrl: 'https://careers.example.test/versioned-two',
     });
     const second = repository.createScan(1, [updated], [], new Date());
     expect(repository.getScan(first.id)?.sourceRuns[0]?.configVersion).toBe(1);

@@ -36,6 +36,13 @@
       "when": 1788199612526,
       "tag": "0004_windy_mongu",
       "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "6",
+      "when": 1788215183411,
+      "tag": "0005_sweden_source_cleanup",
+      "breakpoints": true
     }
   ]
 }

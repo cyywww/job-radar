@@ -146,13 +146,6 @@ footer {
   margin: 0 auto;
 }
 
-.sources-heading > div > p:not(.eyebrow) {
-  max-width: 690px;
-  margin: 22px 0 0;
-  color: #63736e;
-  line-height: 1.6;
-}
-
 .source-settings-layout {
   display: grid;
   grid-template-columns: minmax(300px, 0.65fr) minmax(520px, 1.35fr);
@@ -260,7 +253,7 @@ footer {
 
 .source-metrics {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(5, minmax(0, 1fr));
   gap: 9px;
   margin: 20px 0 14px;
 }
@@ -307,32 +300,6 @@ footer {
 .source-run-line strong {
   margin-right: auto;
   color: #314f47;
-}
-
-.source-support {
-  margin-top: 28px;
-  overflow: hidden;
-  border: 1px solid rgba(23, 50, 45, 0.12);
-  border-radius: 22px;
-  background: rgba(255, 255, 255, 0.55);
-}
-
-.source-support > .source-metrics {
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  margin: 0;
-  padding: 0 22px 22px;
-}
-
-.source-support .source-item {
-  padding: 18px;
-  border: 1px solid rgba(23, 50, 45, 0.09);
-  border-radius: 14px;
-}
-
-.source-support .source-item p {
-  color: #64746f;
-  font-size: 11px;
-  line-height: 1.5;
 }
 
 .source-health-strip {
@@ -1486,9 +1453,6 @@ footer {
   }
   .source-metrics {
     grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
-  .source-support > .source-metrics {
-    grid-template-columns: 1fr;
   }
   .source-item__title,
   .source-latest {

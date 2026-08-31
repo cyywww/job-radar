@@ -32,6 +32,7 @@ function source(config: Partial<JobTechSourceConfig> = {}): Source {
     config: jobTechSourceConfigSchema.parse({
       kind: 'jobtech',
       queryMode: 'confirmed_profile_roles',
+      occupationField: 'apaJ_2ja_LuF',
       pageSize: 2,
       maxPages: 3,
       detailConcurrency: 2,
@@ -107,10 +108,21 @@ describe('JobTechConnector', () => {
       location: 'Stockholm, Stockholms län, Sweden',
       remoteMode: 'remote',
       deadline: '2026-12-15T23:59:59.999Z',
+      sourceMetadata: {
+        occupationGroup: 'Mjukvaru- och systemutvecklare',
+        municipalityCode: '0180',
+        municipalityConceptId: 'fixture-stockholm-municipality',
+        mustHaveLanguages: ['Engelska'],
+      },
     });
     expect(normalized[0]?.descriptionText).toContain('accessible React interfaces');
     expect(normalized[1]?.remoteMode).toBe('hybrid');
     expect(requests.filter((url) => url.pathname.startsWith('/ad/'))).toHaveLength(3);
+    expect(
+      requests
+        .filter((url) => url.pathname === '/search')
+        .every((url) => url.searchParams.get('occupation-field') === 'apaJ_2ja_LuF'),
+    ).toBe(true);
   });
 
   it('retries retryable responses with exponential-delay hooks', async () => {

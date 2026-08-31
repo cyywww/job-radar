@@ -5,7 +5,6 @@ import {
   scanRunSchema,
   scansResponseSchema,
   sourceTestResultSchema,
-  sourceCapabilitiesResponseSchema,
   sourceViewSchema,
   sourcesResponseSchema,
   updateSourceRequestSchema,
@@ -14,7 +13,6 @@ import {
   type JobSummary,
   type ScanRun,
   type SourceTestResult,
-  type SourceCapability,
   type SourceView,
   type UpdateSourceRequest,
 } from '@job-radar/shared';
@@ -60,12 +58,6 @@ export async function fetchJob(jobId: string): Promise<JobDetail> {
 
 export async function fetchSources(): Promise<SourceView[]> {
   return sourcesResponseSchema.parse(await requestJson('/api/sources')).sources;
-}
-
-export async function fetchSourceCapabilities(): Promise<SourceCapability[]> {
-  return sourceCapabilitiesResponseSchema.parse(
-    await requestJson('/api/source-capabilities'),
-  ).capabilities;
 }
 
 export async function createSource(input: CreateSourceRequest): Promise<SourceView> {

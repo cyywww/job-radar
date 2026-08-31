@@ -1,7 +1,7 @@
 import { z } from 'zod';
 
-export const sourceTypeSchema = z.string().regex(/^[a-z][a-z0-9_-]{1,49}$/);
-export const sourceSupportLevelSchema = z.enum(['supported', 'limited', 'not_supported']);
+export const sourceTypeSchema = z.enum(['jobtech', 'generic_web']);
+export const sourceSupportLevelSchema = z.enum(['supported', 'limited']);
 export const sourceHealthStatusSchema = z.enum([
   'unknown',
   'healthy',
@@ -39,69 +39,14 @@ export const jobTechSourceConfigSchema = z
   .object({
     kind: z.literal('jobtech'),
     queryMode: z.literal('confirmed_profile_roles'),
+    occupationField: z.literal('apaJ_2ja_LuF'),
     pageSize: z.number().int().min(1).max(100),
-    maxPages: z.number().int().min(1).max(100),
+    maxPages: z.number().int().min(1).max(20),
     ...requestPolicyShape,
   })
   .strict();
 
-const atsIdentifierSchema = z
-  .string()
-  .trim()
-  .min(1)
-  .max(120)
-  .regex(/^[A-Za-z0-9_-]+$/);
 const companyNameSchema = z.string().trim().min(1).max(240);
-
-export const greenhouseSourceConfigSchema = z
-  .object({
-    kind: z.literal('greenhouse'),
-    boardToken: atsIdentifierSchema,
-    companyName: companyNameSchema,
-    ...requestPolicyShape,
-  })
-  .strict();
-
-export const leverSourceConfigSchema = z
-  .object({
-    kind: z.literal('lever'),
-    site: atsIdentifierSchema,
-    companyName: companyNameSchema,
-    region: z.enum(['global', 'eu']),
-    pageSize: z.number().int().min(1).max(100),
-    maxPages: z.number().int().min(1).max(100),
-    ...requestPolicyShape,
-  })
-  .strict();
-
-export const ashbySourceConfigSchema = z
-  .object({
-    kind: z.literal('ashby'),
-    boardName: atsIdentifierSchema,
-    companyName: companyNameSchema,
-    includeCompensation: z.boolean(),
-    ...requestPolicyShape,
-  })
-  .strict();
-
-const environmentVariableSchema = z
-  .string()
-  .trim()
-  .min(1)
-  .max(120)
-  .regex(/^[A-Z][A-Z0-9_]*$/);
-
-export const teamtailorSourceConfigSchema = z
-  .object({
-    kind: z.literal('teamtailor'),
-    companyName: companyNameSchema,
-    region: z.enum(['eu', 'na', 'au']),
-    apiTokenEnv: environmentVariableSchema,
-    pageSize: z.number().int().min(1).max(30),
-    maxPages: z.number().int().min(1).max(100),
-    ...requestPolicyShape,
-  })
-  .strict();
 
 const publicHttpsUrlSchema = z
   .string()
@@ -124,123 +69,24 @@ export const genericWebSourceConfigSchema = z
 
 export const sourceConfigSchema = z.discriminatedUnion('kind', [
   jobTechSourceConfigSchema,
-  greenhouseSourceConfigSchema,
-  leverSourceConfigSchema,
-  ashbySourceConfigSchema,
-  teamtailorSourceConfigSchema,
   genericWebSourceConfigSchema,
 ]);
 
-export const sourceCapabilitySchema = z
-  .object({
-    type: sourceTypeSchema,
-    label: z.string().min(1).max(120),
-    supportLevel: sourceSupportLevelSchema,
-    configurable: z.boolean(),
-    defaultEnabled: z.boolean(),
-    reason: z.string().min(1).max(1_000),
-  })
-  .strict();
-
-export const sourceCapabilitiesResponseSchema = z
-  .object({ capabilities: z.array(sourceCapabilitySchema) })
-  .strict();
-
-export const sourceCapabilities = sourceCapabilitiesResponseSchema.parse({
-  capabilities: [
-    {
-      type: 'jobtech',
-      label: 'JobTech / Platsbanken',
-      supportLevel: 'supported',
-      configurable: false,
-      defaultEnabled: true,
-      reason: 'Official public JSON API with complete job detail.',
-    },
-    {
-      type: 'greenhouse',
-      label: 'Greenhouse',
-      supportLevel: 'supported',
-      configurable: true,
-      defaultEnabled: true,
-      reason: 'Official unauthenticated public Job Board API.',
-    },
-    {
-      type: 'lever',
-      label: 'Lever',
-      supportLevel: 'supported',
-      configurable: true,
-      defaultEnabled: true,
-      reason: 'Official unauthenticated public Postings API.',
-    },
-    {
-      type: 'ashby',
-      label: 'Ashby',
-      supportLevel: 'supported',
-      configurable: true,
-      defaultEnabled: true,
-      reason: 'Official unauthenticated public Job Postings API.',
-    },
-    {
-      type: 'teamtailor',
-      label: 'Teamtailor',
-      supportLevel: 'limited',
-      configurable: true,
-      defaultEnabled: false,
-      reason:
-        'Official JSON:API is supported, but a company-admin-issued Public Read API key is required and must be supplied through an environment variable.',
-    },
-    {
-      type: 'workday',
-      label: 'Workday',
-      supportLevel: 'not_supported',
-      configurable: false,
-      defaultEnabled: false,
-      reason:
-        'Workday documents external career sites but no stable universal public job API; tenant web-service reports require customer configuration.',
-    },
-    {
-      type: 'jobylon',
-      label: 'Jobylon',
-      supportLevel: 'not_supported',
-      configurable: false,
-      defaultEnabled: false,
-      reason:
-        'The official Feed API is provisioned by Jobylon per customer or integration partner, so there is no reliable unauthenticated generic feed contract.',
-    },
-    {
-      type: 'successfactors',
-      label: 'SAP SuccessFactors',
-      supportLevel: 'not_supported',
-      configurable: false,
-      defaultEnabled: false,
-      reason:
-        'Recruiting OData and Marketing APIs require tenant permissions or credentials and do not form a universal public connector.',
-    },
-    {
-      type: 'generic_web',
-      label: 'Generic web (JSON-LD)',
-      supportLevel: 'limited',
-      configurable: true,
-      defaultEnabled: false,
-      reason:
-        'Explicit opt-in only. Reads one public HTTPS page and accepts schema.org JobPosting JSON-LD; no selectors, login, CAPTCHA, or access-control bypass.',
-    },
-  ],
-});
-
-export function sourceCapabilityForType(
-  type: string,
-): z.infer<typeof sourceCapabilitySchema> {
-  return (
-    sourceCapabilities.capabilities.find((capability) => capability.type === type) ?? {
-      type,
-      label: type,
-      supportLevel: 'not_supported',
-      configurable: false,
-      defaultEnabled: false,
-      reason: 'No reviewed connector capability is registered for this source type.',
-    }
-  );
+export function sourceSupportForType(type: string): {
+  supportLevel: z.infer<typeof sourceSupportLevelSchema>;
+  reason: string;
+} {
+  const supportedType = sourceTypeSchema.parse(type);
+  return supportedType === 'jobtech'
+    ? {
+        supportLevel: 'supported',
+        reason: 'Primary Sweden source: official public JobTech API filtered to Data/IT.',
+      }
+    : {
+        supportLevel: 'limited',
+        reason:
+          'Optional one-page HTTPS source accepting schema.org JobPosting JSON-LD only.',
+      };
 }
 
 export const sourceSchema = z
@@ -263,61 +109,20 @@ export const sourceSchema = z
   })
   .strict();
 
-export const createSourceRequestSchema = z.discriminatedUnion('type', [
-  z
-    .object({
-      type: z.literal('greenhouse'),
-      name: z.string().trim().min(1).max(120),
-      companyName: companyNameSchema,
-      identifier: atsIdentifierSchema,
-    })
-    .strict(),
-  z
-    .object({
-      type: z.literal('lever'),
-      name: z.string().trim().min(1).max(120),
-      companyName: companyNameSchema,
-      identifier: atsIdentifierSchema,
-      region: z.enum(['global', 'eu']).default('global'),
-    })
-    .strict(),
-  z
-    .object({
-      type: z.literal('ashby'),
-      name: z.string().trim().min(1).max(120),
-      companyName: companyNameSchema,
-      identifier: atsIdentifierSchema,
-      includeCompensation: z.boolean().default(true),
-    })
-    .strict(),
-  z
-    .object({
-      type: z.literal('teamtailor'),
-      name: z.string().trim().min(1).max(120),
-      companyName: companyNameSchema,
-      region: z.enum(['eu', 'na', 'au']).default('eu'),
-      apiTokenEnv: environmentVariableSchema,
-    })
-    .strict(),
-  z
-    .object({
-      type: z.literal('generic_web'),
-      name: z.string().trim().min(1).max(120),
-      companyName: companyNameSchema,
-      startUrl: publicHttpsUrlSchema,
-    })
-    .strict(),
-]);
+export const createSourceRequestSchema = z
+  .object({
+    type: z.literal('generic_web'),
+    name: z.string().trim().min(1).max(120),
+    companyName: companyNameSchema,
+    startUrl: publicHttpsUrlSchema,
+  })
+  .strict();
 
 export const updateSourceRequestSchema = z
   .object({
     name: z.string().trim().min(1).max(120).optional(),
     enabled: z.boolean().optional(),
     companyName: companyNameSchema.optional(),
-    identifier: atsIdentifierSchema.optional(),
-    region: z.enum(['global', 'eu', 'na', 'au']).optional(),
-    includeCompensation: z.boolean().optional(),
-    apiTokenEnv: environmentVariableSchema.optional(),
     startUrl: publicHttpsUrlSchema.optional(),
   })
   .strict()
@@ -570,12 +375,7 @@ export type SourceSupportLevel = z.infer<typeof sourceSupportLevelSchema>;
 export type SourceHealthStatus = z.infer<typeof sourceHealthStatusSchema>;
 export type SourceErrorCategory = z.infer<typeof sourceErrorCategorySchema>;
 export type JobTechSourceConfig = z.infer<typeof jobTechSourceConfigSchema>;
-export type GreenhouseSourceConfig = z.infer<typeof greenhouseSourceConfigSchema>;
-export type LeverSourceConfig = z.infer<typeof leverSourceConfigSchema>;
-export type AshbySourceConfig = z.infer<typeof ashbySourceConfigSchema>;
-export type TeamtailorSourceConfig = z.infer<typeof teamtailorSourceConfigSchema>;
 export type GenericWebSourceConfig = z.infer<typeof genericWebSourceConfigSchema>;
-export type SourceCapability = z.infer<typeof sourceCapabilitySchema>;
 export type SourceConfig = z.infer<typeof sourceConfigSchema>;
 export type Source = z.infer<typeof sourceSchema>;
 export type SourceView = z.infer<typeof sourceViewSchema>;

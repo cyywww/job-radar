@@ -14,6 +14,39 @@ import {
 
 let database: DatabaseClient | undefined;
 
+const migrationFiles = [
+  '0000_slimy_the_watchers.sql',
+  '0001_dusty_praxagora.sql',
+  '0002_lush_proemial_gods.sql',
+  '0003_superb_sprite.sql',
+  '0004_windy_mongu.sql',
+  '0005_sweden_source_cleanup.sql',
+] as const;
+
+function copyMigrationsThrough(target: string, lastIndex: number): void {
+  const targetMeta = join(target, 'meta');
+  const currentMigrations = getMigrationsFolder();
+  mkdirSync(targetMeta, { recursive: true });
+
+  for (let index = 0; index <= lastIndex; index += 1) {
+    const prefix = String(index).padStart(4, '0');
+    const migration = migrationFiles[index]!;
+    cpSync(join(currentMigrations, migration), join(target, migration));
+    cpSync(
+      join(currentMigrations, 'meta', `${prefix}_snapshot.json`),
+      join(targetMeta, `${prefix}_snapshot.json`),
+    );
+  }
+
+  const journal = JSON.parse(
+    readFileSync(join(currentMigrations, 'meta', '_journal.json'), 'utf8'),
+  ) as { entries: unknown[] };
+  writeFileSync(
+    join(targetMeta, '_journal.json'),
+    JSON.stringify({ ...journal, entries: journal.entries.slice(0, lastIndex + 1) }),
+  );
+}
+
 afterEach(() => {
   database?.close();
   database = undefined;
@@ -68,33 +101,11 @@ describe('database infrastructure', () => {
     expect(checkDatabase(database).status).toBe('ok');
   });
 
-  it('upgrades a populated Phase 4 database without losing source or snapshot history', () => {
+  it('upgrades a populated JobTech database without losing source or snapshot history', () => {
     const directory = mkdtempSync(join(tmpdir(), 'job-radar-db-upgrade-'));
     const oldMigrations = join(directory, 'old-migrations');
-    const oldMeta = join(oldMigrations, 'meta');
-    mkdirSync(oldMeta, { recursive: true });
     const currentMigrations = getMigrationsFolder();
-    for (let index = 0; index <= 3; index += 1) {
-      const prefix = String(index).padStart(4, '0');
-      const migration = [
-        '0000_slimy_the_watchers.sql',
-        '0001_dusty_praxagora.sql',
-        '0002_lush_proemial_gods.sql',
-        '0003_superb_sprite.sql',
-      ][index]!;
-      cpSync(join(currentMigrations, migration), join(oldMigrations, migration));
-      cpSync(
-        join(currentMigrations, 'meta', `${prefix}_snapshot.json`),
-        join(oldMeta, `${prefix}_snapshot.json`),
-      );
-    }
-    const journal = JSON.parse(
-      readFileSync(join(currentMigrations, 'meta', '_journal.json'), 'utf8'),
-    ) as { entries: unknown[] };
-    writeFileSync(
-      join(oldMeta, '_journal.json'),
-      JSON.stringify({ ...journal, entries: journal.entries.slice(0, 4) }),
-    );
+    copyMigrationsThrough(oldMigrations, 3);
 
     database = openDatabase(join(directory, 'upgrade.sqlite'));
     runMigrations(database, oldMigrations);
@@ -107,7 +118,7 @@ describe('database infrastructure', () => {
       .prepare(
         `insert into sources
           (id, type, name, base_url, enabled, config_json, health_status, created_at, updated_at)
-         values (?, 'greenhouse', 'Historical fixture', 'https://boards-api.greenhouse.io', 1, '{}', 'unknown', ?, ?)`,
+         values (?, 'jobtech', 'Historical JobTech fixture', 'https://jobsearch.api.jobtechdev.se', 1, '{}', 'unknown', ?, ?)`,
       )
       .run(sourceId, timestamp, timestamp);
     database.sqlite
@@ -165,6 +176,117 @@ describe('database infrastructure', () => {
       snapshot_source: sourceId,
       changed_fields: '["initial"]',
     });
+    const source = database.sqlite
+      .prepare(
+        'select config_json as config, config_version as version from sources where id = ?',
+      )
+      .get(sourceId) as { config: string; version: number };
+    expect(JSON.parse(source.config)).toMatchObject({
+      occupationField: 'apaJ_2ja_LuF',
+      pageSize: 100,
+      maxPages: 20,
+    });
+    expect(source.version).toBe(2);
+    expect(database.sqlite.pragma('integrity_check', { simple: true })).toBe('ok');
+    expect(database.sqlite.pragma('foreign_key_check')).toEqual([]);
+  });
+
+  it('removes unsupported source state instead of retaining compatibility data', () => {
+    const directory = mkdtempSync(join(tmpdir(), 'job-radar-db-cleanup-'));
+    const oldMigrations = join(directory, 'old-migrations');
+    const currentMigrations = getMigrationsFolder();
+    copyMigrationsThrough(oldMigrations, 4);
+
+    database = openDatabase(join(directory, 'cleanup.sqlite'));
+    runMigrations(database, oldMigrations);
+
+    const sourceId = '70000000-0000-4000-8000-000000000088';
+    const scanId = '80000000-0000-4000-8000-000000000088';
+    const sourceRunId = '81000000-0000-4000-8000-000000000088';
+    const jobId = '90000000-0000-4000-8000-000000000088';
+    const snapshotId = '91000000-0000-4000-8000-000000000088';
+    const mergeEventId = '92000000-0000-4000-8000-000000000088';
+    const timestamp = Date.parse('2026-08-30T09:00:00.000Z');
+
+    database.sqlite
+      .prepare(
+        `insert into sources
+          (id, type, name, base_url, enabled, config_json, health_status, created_at, updated_at)
+         values (?, 'removed_source', 'Removed source fixture', 'https://boards.example.test',
+           1, '{}', 'healthy', ?, ?)`,
+      )
+      .run(sourceId, timestamp, timestamp);
+    database.sqlite
+      .prepare(
+        `insert into scan_runs (id, status, profile_version, created_at)
+         values (?, 'succeeded', 1, ?)`,
+      )
+      .run(scanId, timestamp);
+    database.sqlite
+      .prepare(
+        `insert into source_runs
+          (id, scan_run_id, source_id, status, queries_json, result_set_complete, created_at)
+         values (?, ?, ?, 'succeeded', '["fictional"]', 1, ?)`,
+      )
+      .run(sourceRunId, scanId, sourceId, timestamp);
+    database.sqlite
+      .prepare(
+        `insert into jobs
+          (id, canonical_key, company, title, location, remote_mode, first_seen_at,
+           last_seen_at, last_changed_at, content_fingerprint, canonical_source_id,
+           active, canonical_url, current_snapshot_id)
+         values (?, 'removed:key', 'Removed Example AB', 'Removed Engineer',
+           'Stockholm, Sweden', 'hybrid', ?, ?, ?, ?, ?, 1,
+           'https://boards.example.test/jobs/removed', ?)`,
+      )
+      .run(jobId, timestamp, timestamp, timestamp, 'b'.repeat(64), sourceId, snapshotId);
+    database.sqlite
+      .prepare(
+        `insert into job_sources
+          (job_id, source_id, source_job_id, source_url, first_seen_at, last_seen_at,
+           last_seen_scan_run_id, consecutive_misses, active, last_changed_at,
+           match_strategy, match_evidence_json, source_metadata_json)
+         values (?, ?, 'removed-external', 'https://boards.example.test/jobs/removed',
+           ?, ?, ?, 0, 1, ?, 'new_job', '{"explanation":"Fixture"}', '{}')`,
+      )
+      .run(jobId, sourceId, timestamp, timestamp, scanId, timestamp);
+    database.sqlite
+      .prepare(
+        `insert into job_snapshots
+          (id, job_id, content_hash, company, title, location, description_text,
+           raw_json, source_id, scan_run_id, changed_fields_json, fetched_at)
+         values (?, ?, ?, 'Removed Example AB', 'Removed Engineer', 'Stockholm, Sweden',
+           'Fictional removed description.', '{}', ?, ?, '["initial"]', ?)`,
+      )
+      .run(snapshotId, jobId, 'c'.repeat(64), sourceId, scanId, timestamp);
+    database.sqlite
+      .prepare(
+        `insert into job_merge_events
+          (id, job_id, source_id, source_job_id, scan_run_id, match_strategy,
+           evidence_json, created_at)
+         values (?, ?, ?, 'removed-external', ?, 'new_job',
+           '{"explanation":"Fixture"}', ?)`,
+      )
+      .run(mergeEventId, jobId, sourceId, scanId, timestamp);
+
+    runMigrations(database, currentMigrations);
+
+    for (const table of [
+      'job_merge_events',
+      'job_snapshots',
+      'job_sources',
+      'jobs',
+      'source_runs',
+      'scan_runs',
+      'sources',
+    ]) {
+      const row = database.sqlite
+        .prepare(`select count(*) as count from ${table}`)
+        .get() as {
+        count: number;
+      };
+      expect(row.count).toBe(0);
+    }
     expect(database.sqlite.pragma('integrity_check', { simple: true })).toBe('ok');
     expect(database.sqlite.pragma('foreign_key_check')).toEqual([]);
   });
