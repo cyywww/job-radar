@@ -1,0 +1,30 @@
+{
+  "name": "@job-radar/api",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "tsx watch src/server.ts",
+    "build": "tsup",
+    "start": "node dist/server.js",
+    "test": "vitest run",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "@fastify/static": "^10.1.3",
+    "@job-radar/config": "workspace:*",
+    "@job-radar/db": "workspace:*",
+    "@job-radar/shared": "workspace:*",
+    "better-sqlite3": "^13.0.3",
+    "dotenv": "^17.4.2",
+    "drizzle-orm": "^0.45.2",
+    "fastify": "^5.12.1",
+    "pino": "^10.3.1",
+    "zod": "^4.4.3"
+  },
+  "devDependencies": {
+    "@job-radar/testing": "workspace:*",
+    "tsup": "^8.5.1",
+    "tsx": "^4.23.12"
+  }
+}

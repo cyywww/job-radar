@@ -1,0 +1,41 @@
+{
+  "name": "job-radar",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "packageManager": "pnpm@11.19.0",
+  "engines": {
+    "node": ">=22.12.0",
+    "pnpm": ">=10.0.0"
+  },
+  "scripts": {
+    "dev": "pnpm db:migrate && concurrently --kill-others --names api,web --prefix-colors blue,green \"pnpm --filter @job-radar/api dev\" \"pnpm --filter @job-radar/web dev\"",
+    "dev:api": "pnpm db:migrate && pnpm --filter @job-radar/api dev",
+    "dev:web": "pnpm --filter @job-radar/web dev",
+    "build:packages": "pnpm --recursive --filter './packages/**' --if-present build",
+    "build": "pnpm build:packages && pnpm --filter @job-radar/web build && pnpm --filter @job-radar/api build",
+    "start": "pnpm db:migrate && pnpm --filter @job-radar/api start",
+    "db:generate": "pnpm --filter @job-radar/db db:generate",
+    "db:migrate": "pnpm --filter @job-radar/db db:migrate",
+    "lint": "eslint .",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "typecheck": "pnpm --recursive --if-present typecheck",
+    "test": "pnpm --filter @job-radar/testing build && pnpm --recursive --if-present test",
+    "check": "pnpm lint && pnpm typecheck && pnpm test && pnpm build"
+  },
+  "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "@types/node": "^22.20.1",
+    "@vitest/coverage-v8": "^4.1.11",
+    "concurrently": "^10.0.5",
+    "eslint": "^10.9.0",
+    "eslint-plugin-react-hooks": "^7.1.1",
+    "eslint-plugin-react-refresh": "^0.5.4",
+    "globals": "^17.11.0",
+    "prettier": "^3.9.6",
+    "typescript": "^6.0.3",
+    "typescript-eslint": "^8.67.0",
+    "vitest": "^4.1.11"
+  }
+}

@@ -1,0 +1,57 @@
+# Dependencies and generated artifacts
+node_modules/
+.pnpm-store/
+dist/
+coverage/
+*.tsbuildinfo
+*.log
+*.pid
+
+# Local environment and secrets
+.env
+.env.*
+!.env.example
+
+# Local runtime state
+/data/*
+!/data/.gitkeep
+/logs/*
+!/logs/.gitkeep
+/config/*
+!/config/.gitkeep
+*.sqlite
+*.sqlite-journal
+*.sqlite-shm
+*.sqlite-wal
+*.db
+*.db-journal
+*.db-shm
+*.db-wal
+
+# Local imports, backups, and test reports
+/uploads/
+/imports/
+/backups/
+/tmp/
+/test-results/
+/playwright-report/
+/blob-report/
+.vitest/
+.cache/
+
+# Personal material must never enter source control
+private/
+profiles/
+resumes/
+applications/
+/[Rr]esume.*
+/[Cc][Vv].*
+
+# Editors and macOS
+.DS_Store
+.idea/
+.vscode/
+
+# Tool caches
+.vite/
+.eslintcache

@@ -1,0 +1,8 @@
+Job Radar implementation plan.md
+/data/
+/logs/
+/config/
+dist/
+coverage/
+node_modules/
+.pnpm-store/
