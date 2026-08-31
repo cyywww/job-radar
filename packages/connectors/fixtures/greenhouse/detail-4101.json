@@ -1,0 +1,17 @@
+{
+  "id": 4101,
+  "internal_job_id": 9101,
+  "title": "Platform Engineer",
+  "company_name": "Northstar Greenhouse Example AB",
+  "first_published": "2026-08-19T08:30:00Z",
+  "updated_at": "2026-08-20T10:00:00Z",
+  "application_deadline": "2026-10-31T22:59:59Z",
+  "requisition_id": "REQ-FICTIONAL-4101",
+  "location": { "name": "Stockholm, Sweden" },
+  "absolute_url": "https://job-boards.greenhouse.io/northstar-example/jobs/4101?utm_source=fixture",
+  "content": "&lt;p&gt;Build reliable fictional developer platforms with TypeScript and Kubernetes.&lt;/p&gt;&lt;ul&gt;&lt;li&gt;Own observability.&lt;/li&gt;&lt;li&gt;Pair with product teams.&lt;/li&gt;&lt;/ul&gt;",
+  "language": "en",
+  "departments": [{ "id": 51, "name": "Engineering" }],
+  "offices": [{ "id": 61, "name": "Stockholm", "location": "Sweden" }],
+  "metadata": [{ "name": "Fictional discipline", "value": "Platform" }]
+}

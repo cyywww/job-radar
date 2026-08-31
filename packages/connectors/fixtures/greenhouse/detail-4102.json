@@ -1,0 +1,16 @@
+{
+  "id": 4102,
+  "internal_job_id": 9102,
+  "title": "Product Designer",
+  "company_name": "Northstar Greenhouse Example AB",
+  "first_published": "2026-08-21T08:30:00Z",
+  "updated_at": "2026-08-21T10:00:00Z",
+  "application_deadline": null,
+  "location": { "name": "Remote — Europe" },
+  "absolute_url": "https://job-boards.greenhouse.io/northstar-example/jobs/4102",
+  "content": "&lt;p&gt;Design accessible fictional workflows for a fully remote product team.&lt;/p&gt;",
+  "language": "en",
+  "departments": [{ "id": 52, "name": "Design" }],
+  "offices": [],
+  "metadata": null
+}

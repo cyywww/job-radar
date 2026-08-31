@@ -29,6 +29,69 @@ export function canonicalizeUrl(value: string): string {
   return url.toString();
 }
 
+const namedEntities: Record<string, string> = {
+  amp: '&',
+  apos: "'",
+  gt: '>',
+  hellip: '…',
+  lt: '<',
+  nbsp: ' ',
+  ndash: '–',
+  quot: '"',
+  rsquo: '’',
+};
+
+export function decodeHtmlEntities(value: string): string {
+  return value.replace(/&(#(?:x[0-9a-f]+|[0-9]+)|[a-z]+);/gi, (entity, code: string) => {
+    if (code.startsWith('#x') || code.startsWith('#X')) {
+      return String.fromCodePoint(Number.parseInt(code.slice(2), 16));
+    }
+    if (code.startsWith('#'))
+      return String.fromCodePoint(Number.parseInt(code.slice(1), 10));
+    return namedEntities[code.toLowerCase()] ?? entity;
+  });
+}
+
+export function htmlToText(value: string): string {
+  let text = '';
+  let insideTag = false;
+  let tag = '';
+  for (const character of value) {
+    if (character === '<' && !insideTag) {
+      insideTag = true;
+      tag = '';
+      continue;
+    }
+    if (character === '>' && insideTag) {
+      insideTag = false;
+      const name = tag.trim().replace(/^\//, '').split(/[\s/]/, 1)[0]?.toLowerCase();
+      if (
+        name &&
+        ['br', 'div', 'h1', 'h2', 'h3', 'h4', 'li', 'p', 'section', 'tr'].includes(name)
+      ) {
+        text += '\n';
+      }
+      continue;
+    }
+    if (insideTag) tag += character;
+    else text += character;
+  }
+  return decodeHtmlEntities(text)
+    .replace(/\r/g, '')
+    .replace(/[ \t]+\n/g, '\n')
+    .replace(/\n{3,}/g, '\n\n')
+    .replace(/[ \t]{2,}/g, ' ')
+    .trim();
+}
+
+export function parseOptionalDate(
+  value: string | number | null | undefined,
+): string | null {
+  if (value === null || value === undefined || value === '') return null;
+  const parsed = new Date(value);
+  return Number.isNaN(parsed.getTime()) ? null : parsed.toISOString();
+}
+
 export async function mapWithConcurrency<T, R>(
   values: readonly T[],
   concurrency: number,

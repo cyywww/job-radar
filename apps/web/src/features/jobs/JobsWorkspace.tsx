@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 
-import type { JobDetail, JobSummary, ScanRun, Source } from '@job-radar/shared';
+import type { JobDetail, JobSummary, ScanRun, SourceView } from '@job-radar/shared';
 
 import {
   cancelScan,
@@ -28,7 +28,7 @@ function runLabel(run: ScanRun): string {
 
 export function JobsWorkspace(): React.JSX.Element {
   const [jobs, setJobs] = useState<JobSummary[]>([]);
-  const [sources, setSources] = useState<Source[]>([]);
+  const [sources, setSources] = useState<SourceView[]>([]);
   const [runs, setRuns] = useState<ScanRun[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [detail, setDetail] = useState<JobDetail | null>(null);
@@ -125,7 +125,7 @@ export function JobsWorkspace(): React.JSX.Element {
     <section className="jobs-workspace">
       <div className="page-heading jobs-heading">
         <div>
-          <p className="eyebrow">JobTech · collection loop</p>
+          <p className="eyebrow">Structured public sources</p>
           <h1>Fresh roles, captured in full.</h1>
           <p>
             Start a scan from this Mac, then inspect normalized metadata and the complete
@@ -139,7 +139,7 @@ export function JobsWorkspace(): React.JSX.Element {
             disabled={submitting || activeRun !== null}
             onClick={() => void handleStart()}
           >
-            {activeRun ? 'Scan in progress' : submitting ? 'Starting…' : 'Scan JobTech'}
+            {activeRun ? 'Scan in progress' : submitting ? 'Starting…' : 'Scan sources'}
           </button>
           {activeRun ? (
             <button
@@ -165,12 +165,14 @@ export function JobsWorkspace(): React.JSX.Element {
           </div>
         </div>
         <p>
-          {latestRun ? runLabel(latestRun) : 'Run JobTech once to populate the radar.'}
+          {latestRun
+            ? runLabel(latestRun)
+            : 'Run enabled sources once to populate the radar.'}
         </p>
         <small>
           {latestRun
             ? `Created ${formatDate(latestRun.createdAt)}`
-            : `${sources.length} configured source`}
+            : `${sources.length} configured source${sources.length === 1 ? '' : 's'}`}
         </small>
       </div>
 
@@ -181,7 +183,10 @@ export function JobsWorkspace(): React.JSX.Element {
           <span>{run.pagesFetched} pages</span>
           <span>{run.retryCount} retries</span>
           {run.errorSummary ? (
-            <span className="source-run-error">{run.errorSummary}</span>
+            <span className="source-run-error">
+              {run.errorCategory ? `${run.errorCategory.replaceAll('_', ' ')} · ` : ''}
+              {run.errorSummary}
+            </span>
           ) : null}
         </div>
       ))}
@@ -201,7 +206,9 @@ export function JobsWorkspace(): React.JSX.Element {
           {!loading && jobs.length === 0 ? (
             <div className="jobs-empty">
               <strong>No active jobs yet.</strong>
-              <p>Confirm target roles in Profile, then start a JobTech scan.</p>
+              <p>
+                Confirm target roles in Profile, configure a source, then start a scan.
+              </p>
             </div>
           ) : null}
           {jobs.map((job) => (
@@ -258,7 +265,7 @@ export function JobsWorkspace(): React.JSX.Element {
                 target="_blank"
                 rel="noreferrer"
               >
-                Open original JobTech listing ↗
+                Open original listing ↗
               </a>
               <div className="description-heading">
                 <h3>Complete description</h3>
@@ -268,7 +275,7 @@ export function JobsWorkspace(): React.JSX.Element {
                 {visibleDetail.snapshot.descriptionText}
               </div>
               <p className="audit-note">
-                Raw JobTech response retained locally · SHA-256{' '}
+                Raw source response retained locally · SHA-256{' '}
                 {visibleDetail.snapshot.contentHash.slice(0, 12)}…
               </p>
             </>

@@ -42,6 +42,7 @@ function source(config: Partial<JobTechSourceConfig> = {}): Source {
     }),
     lastSuccessAt: null,
     lastError: null,
+    lastErrorCategory: null,
     healthStatus: 'unknown',
     createdAt: '2026-08-31T08:00:00.000Z',
     updatedAt: '2026-08-31T08:00:00.000Z',

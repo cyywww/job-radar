@@ -4,171 +4,122 @@ Last updated: 2026-08-31
 
 ## Current milestone
 
-M2 / Phase 3 — the first JobTech collection loop is complete: confirmed Profile search
-roles can drive discovery, full-detail retrieval, normalization, SQLite persistence, API
-queries, and browser review.
+Phase 4 / M2 structured-source expansion is complete: JobTech plus user-configured
+Greenhouse, Lever, and Ashby public boards can be managed in the browser, scanned behind
+independent failure boundaries, normalized to the shared Job model, and audited through
+durable health, metrics, run summaries, source metadata, and immutable snapshots.
+
+## Connector support status
+
+| Connector  | Status    | Supported scope                                                                                                         | Deliberate limits                                                                                           |
+| ---------- | --------- | ----------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------- |
+| JobTech    | Supported | Confirmed-role free-text discovery, offset pagination, `/ad/{id}` complete detail, lifecycle                            | No taxonomy/location ID mapping yet.                                                                        |
+| Greenhouse | Supported | Public board list plus individual public job detail; dates, location, content, source fields                            | Official list is non-paginated. Employment type is unavailable. Company can fall back to configured label.  |
+| Lever      | Supported | Global/EU public Postings API, documented skip/limit paging, individual detail, structured categories/workplace         | Company is configured; no public application deadline.                                                      |
+| Ashby      | Supported | Public complete board response, embedded plain/HTML detail, workplace/employment, optional public compensation metadata | Official endpoint is non-paginated. Unlisted posts are excluded; company is configured; no public deadline. |
+
+All four connectors use fixed official JSON origins, strict Zod parsing, explicit
+User-Agent, abortable timeout/retry/rate/concurrency policy, safe error classification,
+and fictional offline fixtures. There is no login/CAPTCHA bypass or HTML scraping.
 
 ## Completed
 
-- Preserved and re-verified the complete M0/M1 quality gate before M2 changes.
-- `JR-201`: reusable `JobConnector` contract in `@job-radar/connectors`, with explicit
-  `healthCheck`, `discover`, `fetchDetail`, and `normalize` stages.
-- `Source` plus discriminated `SourceConfig` contracts. The default local JobTech source
-  is inserted idempotently and keeps its base URL, enablement, request policy, latest
-  success/error, and health state in SQLite.
-- `JR-202`: durable `ScanRun` and per-source `SourceRun` state, including terminal state,
-  timestamps, queries, completeness, page/retry counts, created/updated/unchanged/closed/
-  failed counts, and a bounded safe error summary.
-- `Job`, `JobSource`, and immutable `JobSnapshot` models plus generated and reviewed
-  migration `0002_lush_proemial_gods.sql`.
-- `JR-203`: JobTech JobSearch connector using `/search` pagination and `/ad/{id}` full
-  details. Search results are never treated as the complete description.
-- JobTech normalization for source ID, title, employer, location, publication timestamp,
-  application deadline, complete plain-text/HTML description, canonical/source URL,
-  employment type, and conservative remote/hybrid/unknown mode.
-- Request timeout, capped exponential retry for 408/425/429/5xx and transport timeouts,
-  explicit User-Agent, per-source start-rate limiting, bounded detail concurrency, and
-  `AbortSignal` cancellation.
-- Complete parsed JobTech detail responses are stored in `job_snapshots.raw_json`. The
-  raw response is local/auditable but is not returned by normal job APIs or logged.
-- Idempotency by `(source_id, source_job_id)` and a stable `sourceType:sourceJobId`
-  canonical key for the single-source phase. Stable raw-response hashing prevents an
-  identical fixture scan from creating more snapshots.
-- Snapshot history: a changed JobTech detail response creates a new immutable snapshot
-  and advances `jobs.current_snapshot_id`.
-- First lifecycle rules: seen jobs reset source misses; explicit source removal or an
-  elapsed deadline closes a job; three consecutive complete scans without a source job
-  close it. Truncated or failed scans never increment missing counters.
-- Process-local scan coordination with one active scan, background execution, source and
-  per-detail error isolation, cancellation, and graceful shutdown before SQLite closes.
-- Confirmed-only search boundary: scan queries come only from confirmed
-  `preferences.targetRoles` through `ProfileRepository.getConfirmedView()`. Pending or
-  rejected facts are not inspected.
-- Zod-validated API endpoints:
+- Added strict discriminated Greenhouse, Lever, and Ashby `SourceConfig` contracts with a
+  shared bounded request policy and source-neutral `NormalizedJob` output.
+- Added a shared connector transport with per-source pacing, timeout, capped exponential
+  retry, bounded `Retry-After`, cancellation, JSON validation boundary, and classified
+  safe errors.
+- Added `GreenhouseConnector`, `LeverConnector`, and `AshbyConnector`, retaining stable
+  external IDs, original URLs, complete raw detail data, and ATS-only metadata outside the
+  core Job fields.
+- Added reusable `exerciseConnectorContract` validation for later structured sources.
+- Added fixed fictional success, empty, multi-job or multi-page, rate/failure, and detail
+  fixtures/tests for all three ATS connectors. Default tests have no network dependency.
+- Added Zod-validated source configuration APIs:
   - `GET /api/sources`
-  - `POST /api/scans`, `GET /api/scans`, `GET /api/scans/:id`
-  - `POST /api/scans/:id/cancel`
-  - `GET /api/jobs`, `GET /api/jobs/:id`
-- Minimal React Jobs workspace with JobTech scan/cancel controls, active-run polling, latest
-  ScanRun/SourceRun status, active job list, normalized metadata, original link, complete
-  safe-text description, snapshot count, and audit hash indicator.
-- Fixed fictional JobTech JSON fixtures for pagination and complete details. The default
-  test suite has no external-network dependency.
+  - `POST /api/sources`
+  - `PATCH /api/sources/:id`
+  - `DELETE /api/sources/:id`
+  - `POST /api/sources/:id/test`
+- Restricted creation to official fixed API origins. Lever global/EU is explicit; no
+  arbitrary URL can be supplied through the browser API.
+- Added source pause/enable and soft deletion. Deleted sources leave historical runs,
+  JobSource links, and snapshots auditable while disappearing from future scans.
+- Added durable source/run error categories, health, last success/error, aggregate run/
+  retry/job metrics, and the latest SourceRun summary.
+- Preserved source and detail isolation: one failed connector does not stop later sources,
+  and one failed detail does not discard sibling jobs.
+- Generalized lifecycle missing thresholds across all source configs. Only complete
+  discovery can advance misses; failed, cancelled, and capped scans remain non-closing.
+- Added source-scoped canonical keys and a conservative cross-source matcher requiring an
+  exact company/title/location/full-description match. Same-source repeat scans remain
+  idempotent by `(source_id, source_job_id)`.
+- Made merged-job lifecycle source-aware: an inactive or expired source link cannot close
+  a Job while another source link remains active.
+- Added JobSource metadata storage and raw-response audit without exposing raw JSON through
+  normal APIs or rendering upstream HTML.
+- Added a Sources browser workspace for add/configure, test, pause/enable, delete, health,
+  friendly errors, metrics, and latest-run inspection. Jobs now scans all enabled sources
+  and reports classified per-source errors.
+- Added generated/reviewed migration `0003_superb_sprite.sql`.
 
 ## Deliberately not implemented
 
-- Greenhouse, Lever, Ashby, Teamtailor, Workday, generic HTML, or any other connector.
-- JobTech Taxonomy ID lookup and structured geographic filtering. This first loop sends
-  each confirmed target role as a free-text JobSearch query; confirmed locations remain
-  available for the later structured-search adapter.
-- Cross-source fuzzy deduplication. The current key is exact and correct for one JobTech
-  source; cross-source company/title/location/description matching begins only when a
-  second connector is added.
-- AI extraction, requirements, eligibility Gates, scoring, ranking, or rescore queues.
-- Job triage, applications, automated scheduling, notifications, SSE, or a public server.
-- Rendering upstream HTML. The browser displays `description_text` as text, avoiding an
-  untrusted-HTML/XSS surface; HTML is retained only in the local snapshot.
+- Teamtailor, Workday, Jobylon, SuccessFactors, generic HTML, or any other new source.
+- Authenticated ATS endpoints, application submission, internal postings, CAPTCHA/login
+  bypass, browser scraping, or high-risk anti-bot behavior.
+- Broad fuzzy cross-source matching. Exact complete-content matching is the only merge
+  rule beyond source identity.
+- AI requirement extraction, eligibility Gates, scoring, ranking, rescore queues, or evals.
+- Daily scheduling, service management, notifications, crash recovery, backups, or the
+  project CLI.
+- Applications, triage, feedback, or automated application behavior.
 
-## Connector contract for subsequent ATS sources
-
-The public contract is exported from `packages/connectors/src/contracts.ts`:
-
-```ts
-interface JobConnector<TDiscovered, TRaw> {
-  readonly type: string;
-  healthCheck(context: ConnectorContext): Promise<ConnectorHealthResult>;
-  discover(context: ConnectorContext): Promise<DiscoveryResult<TDiscovered>>;
-  fetchDetail(job: TDiscovered, context: ConnectorContext): Promise<TRaw>;
-  normalize(raw: TRaw): Promise<NormalizedJob> | NormalizedJob;
-}
-```
-
-Every new connector must:
-
-1. Add a discriminated, bounded config variant to `SourceConfig` without weakening the
-   existing JobTech config.
-2. Use a stable source type and external ID, return whether discovery was complete, and
-   distinguish the search/list response from the complete detail response.
-3. Populate every `NormalizedJob` field, retain the complete raw detail object, and use
-   `null`/`unknown` instead of guessing missing fields.
-4. Honour the supplied `AbortSignal`, request timeout, retry cap, rate limit, concurrency
-   cap, explicit User-Agent, and `onRetry` accounting callback.
-5. Throw bounded connector errors that do not contain JD/Profile text, credentials,
-   headers, or raw responses. A job-detail failure must not abort sibling jobs; a source
-   failure must not escape the scan coordinator.
-6. Ship fictional fixed list/detail fixtures covering pagination, empty fields, retries,
-   partial failure, cancellation, normalization, and repeat-scan idempotency. Live network
-   checks remain opt-in.
-7. Extend canonical matching deliberately before enabling cross-source merging. Never
-   reuse the current exact source key as proof that two different sources are the same
-   vacancy.
-
-The complete operational description is in `docs/connectors.md`.
-
-## Verification commands
-
-Run from `/Users/yuweicao/Projects/job-radar`:
-
-```bash
-pnpm install --frozen-lockfile
-pnpm db:migrate
-pnpm lint
-pnpm format:check
-pnpm typecheck
-pnpm test
-pnpm build
-pnpm check
-pnpm dev
-pnpm start
-```
-
-For an empty-database acceptance check, override `JOB_RADAR_DATABASE_PATH` with a new
-disposable path. Runtime acceptance should create a fictional confirmed Profile, start a
-fixture or live scan, poll its run, and query the resulting job list/detail.
-
-## Latest verified result
+## Verification result
 
 Verified on 2026-08-31 with Node 22.16.0 and pnpm 11.19.0:
 
-- The M0/M1 baseline passed before implementation.
-- The deterministic suite passes 52 tests across 16 files: 11 shared, 3 config, 7
-  connector, 5 database, 22 API, and 4 web tests.
-- Fixture API scans store three full fictional jobs and three snapshots; an identical
-  repeat creates zero jobs/snapshots, while a changed detail creates one new snapshot.
-- Three complete missing scans close all fixture jobs; earlier missing scans and
-  incomplete/failing scans do not.
-- Connector failure and cancellation reach terminal ScanRun/SourceRun states while
-  `/api/health` remains available.
-- `pnpm check` passed lint, all workspace TypeScript checks, all 52 tests, package builds,
+- The deterministic suite passes 64 tests across 20 files: 12 shared, 3 config, 13
+  connector, 7 database, 24 API, and 5 web tests.
+- Connector contract/fixture tests cover all four source types; Lever proves two-page
+  discovery while Greenhouse/Ashby prove their documented complete-board semantics.
+- API integration proves the full source-management lifecycle, health testing, safe error
+  categories, one-source failure isolation, durable metrics/latest summaries, and the
+  existing repeat-scan/detail-failure/cancellation/lifecycle behavior.
+- Database integration proves exact cross-source merge, two retained source links,
+  same-source repeat idempotency, immutable source-specific snapshots, metadata markers,
+  and migration integrity.
+- Browser tests prove source add/test/edit/pause/enable/delete plus Jobs scan/detail and
+  Profile version flows.
+- `pnpm check` passed lint, all workspace TypeScript checks, all 64 tests, package builds,
   the Vite production build, and the Fastify bundle; `pnpm format:check` passed.
-- A new disposable SQLite database applied all three migrations, exposed all 12
-  application tables from M0–M2, returned `ok` from `PRAGMA integrity_check`, and had no
-  foreign-key violations.
-- `pnpm dev` migrated first, started Vite and Fastify on loopback, and returned HTTP 200
-  from the web entry, health, readiness, sources, and jobs routes.
-- `pnpm start` served the production React build and returned HTTP 200 from the root,
-  health, sources, and jobs routes.
-- In-app browser acceptance opened the production build, navigated to Jobs, verified the
-  source/run/list/detail empty states and Profile precondition error, and found no browser
-  console warnings or errors.
-- An opt-in live JobTech smoke used a disposable database, fictional Profile, and a
-  one-result page cap. Run `c6ac889c-f03a-4ec9-965a-9230c1536e03` succeeded with one
-  discovered/fetched/created job, zero retries/failures, a 2,924-character full
-  description, stored raw response, and one snapshot. Its intentionally truncated
-  discovery correctly reported `resultSetComplete=false`. The disposable data was
-  deleted after the check.
+- A disposable empty SQLite database applied all four migrations, exposed the Phase 4
+  columns, returned `ok` from `PRAGMA integrity_check`, and had no foreign-key violations.
+- `pnpm dev` and `pnpm start` both migrated first, bound only to loopback, and returned
+  HTTP 200 for their web entry plus health, readiness, sources, and jobs routes.
+- In-app browser acceptance used a disposable database and the production build. It
+  verified Sources navigation, fictional source creation, pause/enable, source metrics
+  empty states, the multi-source Jobs empty state, responsive visual layout, and an empty
+  browser warning/error console.
+- Live Greenhouse/Lever/Ashby network smoke is optional and was not part of the
+  deterministic suite.
 
-## Stable M1 interfaces retained
+## Stable privacy and phase boundaries
 
 - `ProfileRepository.getConfirmedView()` and `GET /api/profile/confirmed` remain the only
-  candidate-data consumption boundary for collection and future scoring.
-- Profile facts, evidence, preferences, imports, confirmation, and immutable version APIs
-  are unchanged.
-- M2 does not read `profile_facts` directly and does not promote pending facts.
+  candidate-data consumption boundary. Pending/rejected facts are not inspected.
+- Connectors receive queries and source configuration but never read Profile tables or
+  write SQLite directly.
+- Complete raw source details remain local in snapshots; normal APIs expose only safe
+  normalized descriptions, audit hashes, and storage markers.
+- The server remains loopback-only and no credentials are required by supported ATS
+  connectors.
 
-## Next phase entry
+## Phase 5 entry
 
-A second connector can reuse the contract above after adding its config variant, source
-row, fixed fixtures, and a reviewed cross-source matching policy. M3 scoring must consume
-only `JobDetail.snapshot` plus `ConfirmedProfileView`; it must not use raw source JSON as
-candidate evidence or bypass confirmation.
+The next phase is the scoring vertical slice. It still needs strict requirement-extraction
+schemas, the replaceable AI Provider boundary (Codex CLI first), deterministic eligibility
+Gates, evidence-linked match/gap output, versioned weighted scoring/ranking, confidence and
+unknown handling, invalid-output audit, pending/retry queues, score invalidation on Profile
+or snapshot changes, and a fictional eval set. It must consume only `ConfirmedProfileView`
+plus normalized Job detail/snapshot data, never raw ATS metadata as candidate evidence.

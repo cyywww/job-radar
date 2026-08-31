@@ -2,19 +2,33 @@ import type { FastifyBaseLogger } from 'fastify';
 import { ZodError } from 'zod';
 
 import {
+  AshbyConnector,
   ConnectorCancelledError,
   ConnectorRequestError,
+  GreenhouseConnector,
   JobTechConnector,
+  LeverConnector,
   mapWithConcurrency,
   type ConnectorContext,
   type JobConnector,
 } from '@job-radar/connectors';
-import { JobRepository, ProfileRepository, type DatabaseClient } from '@job-radar/db';
 import {
+  JobRepository,
+  ProfileRepository,
+  SourceRepositoryError,
+  type DatabaseClient,
+} from '@job-radar/db';
+import {
+  sourceTestResultSchema,
+  type CreateSourceRequest,
   type CreateScanRequest,
   type RunCounts,
   type ScanRun,
   type Source,
+  type SourceErrorCategory,
+  type SourceTestResult,
+  type SourceView,
+  type UpdateSourceRequest,
 } from '@job-radar/shared';
 
 export class ScanCoordinatorError extends Error {
@@ -55,10 +69,20 @@ function newCounts(): RunCounts {
   };
 }
 
-function safeErrorSummary(error: unknown): string {
-  if (error instanceof ConnectorRequestError) return error.message.slice(0, 500);
-  if (error instanceof ZodError) return 'Connector response did not match its schema';
-  return 'Connector failed unexpectedly';
+function safeError(error: unknown): {
+  summary: string;
+  category: SourceErrorCategory;
+} {
+  if (error instanceof ConnectorRequestError) {
+    return { summary: error.message.slice(0, 500), category: error.category };
+  }
+  if (error instanceof ZodError) {
+    return {
+      summary: 'Connector response did not match its schema',
+      category: 'invalid_response',
+    };
+  }
+  return { summary: 'Connector failed unexpectedly', category: 'unexpected' };
 }
 
 export class ScanCoordinator {
@@ -76,13 +100,107 @@ export class ScanCoordinator {
     this.jobs = new JobRepository(database);
     this.profiles = new ProfileRepository(database);
     this.now = options.now ?? (() => new Date());
-    const connectors = options.connectors ?? [new JobTechConnector()];
+    const connectors = options.connectors ?? [
+      new JobTechConnector(),
+      new GreenhouseConnector(),
+      new LeverConnector(),
+      new AshbyConnector(),
+    ];
     this.connectors = new Map(connectors.map((connector) => [connector.type, connector]));
     this.jobs.ensureDefaultSources(this.now());
   }
 
-  public listSources(): Source[] {
-    return this.jobs.listSources();
+  public listSources(): SourceView[] {
+    return this.jobs.listSourceViews();
+  }
+
+  public createSource(input: CreateSourceRequest): SourceView {
+    const source = this.jobs.createSource(input, this.now());
+    return this.jobs.getSourceView(source.id)!;
+  }
+
+  public updateSource(sourceId: string, input: UpdateSourceRequest): SourceView {
+    this.jobs.updateSource(sourceId, input, this.now());
+    return this.jobs.getSourceView(sourceId)!;
+  }
+
+  public deleteSource(sourceId: string): void {
+    this.jobs.deleteSource(sourceId, this.now());
+  }
+
+  public async testSource(sourceId: string): Promise<SourceTestResult> {
+    const source = this.jobs.getSource(sourceId);
+    if (!source) {
+      throw new SourceRepositoryError('SOURCE_NOT_FOUND', 'Source does not exist');
+    }
+    const connector = this.connectors.get(source.type);
+    const checkedAt = this.now();
+    let retryCount = 0;
+
+    if (!connector) {
+      const message = `No connector is registered for source type ${source.type}`;
+      this.jobs.updateSourceHealth(
+        source.id,
+        'unavailable',
+        message,
+        'connector_unavailable',
+        checkedAt,
+      );
+      return sourceTestResultSchema.parse({
+        source: this.jobs.getSourceView(source.id),
+        status: 'unavailable',
+        errorCategory: 'connector_unavailable',
+        message,
+        retryCount,
+        checkedAt: checkedAt.toISOString(),
+      });
+    }
+
+    const context: ConnectorContext = {
+      source,
+      queries: [],
+      signal: new AbortController().signal,
+      onRetry: () => {
+        retryCount += 1;
+      },
+    };
+    try {
+      const health = await connector.healthCheck(context);
+      const category = health.status === 'unavailable' ? 'connector_unavailable' : null;
+      this.jobs.updateSourceHealth(
+        source.id,
+        health.status,
+        health.message,
+        category,
+        checkedAt,
+        health.status === 'healthy',
+      );
+      return sourceTestResultSchema.parse({
+        source: this.jobs.getSourceView(source.id),
+        status: health.status,
+        errorCategory: category,
+        message: health.message,
+        retryCount,
+        checkedAt: checkedAt.toISOString(),
+      });
+    } catch (error) {
+      const safe = safeError(error);
+      this.jobs.updateSourceHealth(
+        source.id,
+        'unavailable',
+        safe.summary,
+        safe.category,
+        checkedAt,
+      );
+      return sourceTestResultSchema.parse({
+        source: this.jobs.getSourceView(source.id),
+        status: 'unavailable',
+        errorCategory: safe.category,
+        message: safe.summary,
+        retryCount,
+        checkedAt: checkedAt.toISOString(),
+      });
+    }
   }
 
   public start(request: CreateScanRequest): ScanRun {
@@ -174,6 +292,7 @@ export class ScanCoordinator {
           resultSetComplete: null,
           pagesFetched: 0,
           counts: newCounts(),
+          errorCategory: 'cancelled',
           errorSummary: 'Scan cancelled',
           finishedAt: this.now(),
         });
@@ -207,12 +326,19 @@ export class ScanCoordinator {
     if (!connector) {
       const errorSummary = `No connector is registered for source type ${source.type}`;
       counts.failed = 1;
-      this.jobs.updateSourceHealth(source.id, 'unavailable', errorSummary, this.now());
+      this.jobs.updateSourceHealth(
+        source.id,
+        'unavailable',
+        errorSummary,
+        'connector_unavailable',
+        this.now(),
+      );
       this.jobs.completeSourceRun(runId, source.id, {
         status: 'failed',
         resultSetComplete,
         pagesFetched,
         counts,
+        errorCategory: 'connector_unavailable',
         errorSummary,
         finishedAt: this.now(),
       });
@@ -228,13 +354,12 @@ export class ScanCoordinator {
 
     try {
       await connector.healthCheck(context);
-      this.jobs.updateSourceHealth(source.id, 'healthy', null, this.now());
+      this.jobs.updateSourceHealth(source.id, 'healthy', null, null, this.now());
       const discovery = await connector.discover(context);
       pagesFetched = discovery.pagesFetched;
       resultSetComplete = discovery.complete;
       counts.discovered = discovery.jobs.length;
-      const concurrency =
-        source.config.kind === 'jobtech' ? source.config.detailConcurrency : 1;
+      const concurrency = source.config.detailConcurrency;
       const results = await mapWithConcurrency(
         discovery.jobs,
         concurrency,
@@ -270,26 +395,37 @@ export class ScanCoordinator {
         ? `${counts.failed} discovered job detail${counts.failed === 1 ? '' : 's'} failed`
         : null;
       if (partial) {
-        this.jobs.updateSourceHealth(source.id, 'degraded', errorSummary, this.now());
+        this.jobs.updateSourceHealth(
+          source.id,
+          'degraded',
+          errorSummary,
+          'partial_detail',
+          this.now(),
+        );
       } else {
-        this.jobs.updateSourceHealth(source.id, 'healthy', null, this.now(), true);
+        this.jobs.updateSourceHealth(source.id, 'healthy', null, null, this.now(), true);
       }
       this.jobs.completeSourceRun(runId, source.id, {
         status: partial ? 'partial' : 'succeeded',
         resultSetComplete,
         pagesFetched,
         counts,
+        errorCategory: partial ? 'partial_detail' : null,
         errorSummary,
         finishedAt: this.now(),
       });
     } catch (error) {
       const cancelled = signal.aborted || error instanceof ConnectorCancelledError;
-      const errorSummary = cancelled ? 'Scan cancelled' : safeErrorSummary(error);
+      const safe = cancelled
+        ? { summary: 'Scan cancelled', category: 'cancelled' as const }
+        : safeError(error);
+      const errorSummary = safe.summary;
       if (!cancelled) counts.failed = Math.max(1, counts.failed);
       this.jobs.updateSourceHealth(
         source.id,
         cancelled ? 'degraded' : 'unavailable',
         errorSummary,
+        safe.category,
         this.now(),
       );
       this.jobs.completeSourceRun(runId, source.id, {
@@ -297,6 +433,7 @@ export class ScanCoordinator {
         resultSetComplete,
         pagesFetched,
         counts,
+        errorCategory: safe.category,
         errorSummary,
         finishedAt: this.now(),
       });

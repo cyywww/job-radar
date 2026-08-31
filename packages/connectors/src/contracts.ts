@@ -1,4 +1,4 @@
-import type { NormalizedJob, Source } from '@job-radar/shared';
+import type { NormalizedJob, Source, SourceErrorCategory } from '@job-radar/shared';
 
 export interface ConnectorRetryEvent {
   readonly operation: 'health' | 'discover' | 'detail';
@@ -50,6 +50,7 @@ export class ConnectorCancelledError extends Error {
 export class ConnectorRequestError extends Error {
   public constructor(
     message: string,
+    public readonly category: SourceErrorCategory,
     public readonly statusCode?: number,
   ) {
     super(message);

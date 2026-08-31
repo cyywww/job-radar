@@ -40,6 +40,9 @@ coverage/
 /test-results/
 /playwright-report/
 /blob-report/
+.playwright/
+.nyc_output/
+*.lcov
 .vitest/
 .cache/
 

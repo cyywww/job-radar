@@ -1,13 +1,18 @@
 import { createHash, randomUUID } from 'node:crypto';
 
-import { and, desc, eq, inArray, like, or, sql } from 'drizzle-orm';
+import { and, desc, eq, inArray, isNull, like, or, sql } from 'drizzle-orm';
 
 import {
+  ashbySourceConfigSchema,
+  greenhouseSourceConfigSchema,
   jobDetailSchema,
   jobSummarySchema,
   jobTechSourceConfigSchema,
+  leverSourceConfigSchema,
   scanRunSchema,
   sourceSchema,
+  sourceViewSchema,
+  type CreateSourceRequest,
   type JobDetail,
   type JobSummary,
   type JobsQuery,
@@ -15,8 +20,11 @@ import {
   type RunCounts,
   type ScanRun,
   type Source,
+  type SourceErrorCategory,
   type SourceHealthStatus,
   type SourceRun,
+  type SourceView,
+  type UpdateSourceRequest,
 } from '@job-radar/shared';
 
 import type { DatabaseClient } from './database.js';
@@ -30,11 +38,8 @@ import {
 } from './schema.js';
 
 export const DEFAULT_JOBTECH_SOURCE_ID = '70000000-0000-4000-8000-000000000001';
-export const DEFAULT_JOBTECH_SOURCE_CONFIG = jobTechSourceConfigSchema.parse({
-  kind: 'jobtech',
-  queryMode: 'confirmed_profile_roles',
-  pageSize: 25,
-  maxPages: 4,
+
+const DEFAULT_REQUEST_POLICY = {
   detailConcurrency: 4,
   requestTimeoutMs: 10_000,
   maxRetries: 3,
@@ -42,7 +47,26 @@ export const DEFAULT_JOBTECH_SOURCE_CONFIG = jobTechSourceConfigSchema.parse({
   minRequestIntervalMs: 150,
   missingThreshold: 3,
   userAgent: 'Job-Radar/0.1 (local-first personal job search)',
+} as const;
+
+export const DEFAULT_JOBTECH_SOURCE_CONFIG = jobTechSourceConfigSchema.parse({
+  kind: 'jobtech',
+  queryMode: 'confirmed_profile_roles',
+  pageSize: 25,
+  maxPages: 4,
+  ...DEFAULT_REQUEST_POLICY,
 });
+
+export class SourceRepositoryError extends Error {
+  public constructor(
+    public readonly code:
+      'SOURCE_NOT_FOUND' | 'SOURCE_CONFLICT' | 'SOURCE_INVALID_UPDATE',
+    message: string,
+  ) {
+    super(message);
+    this.name = 'SourceRepositoryError';
+  }
+}
 
 const emptyCounts = (): RunCounts => ({
   discovered: 0,
@@ -87,6 +111,7 @@ function sourceFromRow(row: typeof sources.$inferSelect): Source {
     config: row.config,
     lastSuccessAt: date(row.lastSuccessAt),
     lastError: row.lastError,
+    lastErrorCategory: row.lastErrorCategory,
     healthStatus: row.healthStatus,
     createdAt: row.createdAt.toISOString(),
     updatedAt: row.updatedAt.toISOString(),
@@ -126,6 +151,7 @@ export interface CompleteSourceRunInput {
   readonly resultSetComplete: boolean | null;
   readonly pagesFetched: number;
   readonly counts: RunCounts;
+  readonly errorCategory: SourceErrorCategory | null;
   readonly errorSummary: string | null;
   readonly finishedAt: Date;
 }
@@ -168,9 +194,200 @@ export class JobRepository {
     return this.client.db
       .select()
       .from(sources)
+      .where(isNull(sources.deletedAt))
       .orderBy(sources.name)
       .all()
       .map(sourceFromRow);
+  }
+
+  public getSource(sourceId: string): Source | null {
+    const row = this.client.db
+      .select()
+      .from(sources)
+      .where(and(eq(sources.id, sourceId), isNull(sources.deletedAt)))
+      .get();
+    return row ? sourceFromRow(row) : null;
+  }
+
+  public createSource(input: CreateSourceRequest, now = new Date()): Source {
+    const id = randomUUID();
+    const common = { ...DEFAULT_REQUEST_POLICY };
+    const values =
+      input.type === 'greenhouse'
+        ? {
+            type: input.type,
+            baseUrl: 'https://boards-api.greenhouse.io',
+            config: greenhouseSourceConfigSchema.parse({
+              kind: 'greenhouse',
+              boardToken: input.identifier,
+              companyName: input.companyName,
+              ...common,
+            }),
+          }
+        : input.type === 'lever'
+          ? {
+              type: input.type,
+              baseUrl:
+                input.region === 'eu'
+                  ? 'https://api.eu.lever.co'
+                  : 'https://api.lever.co',
+              config: leverSourceConfigSchema.parse({
+                kind: 'lever',
+                site: input.identifier,
+                companyName: input.companyName,
+                region: input.region,
+                pageSize: 50,
+                maxPages: 20,
+                ...common,
+              }),
+            }
+          : {
+              type: input.type,
+              baseUrl: 'https://api.ashbyhq.com',
+              config: ashbySourceConfigSchema.parse({
+                kind: 'ashby',
+                boardName: input.identifier,
+                companyName: input.companyName,
+                includeCompensation: input.includeCompensation,
+                ...common,
+              }),
+            };
+
+    const conflict = this.client.db
+      .select({ id: sources.id })
+      .from(sources)
+      .where(
+        and(
+          eq(sources.type, input.type),
+          eq(sources.name, input.name),
+          isNull(sources.deletedAt),
+        ),
+      )
+      .get();
+    if (conflict) {
+      throw new SourceRepositoryError(
+        'SOURCE_CONFLICT',
+        'A source with this type and name already exists',
+      );
+    }
+
+    this.client.db
+      .insert(sources)
+      .values({
+        id,
+        name: input.name,
+        enabled: true,
+        healthStatus: 'unknown',
+        createdAt: now,
+        updatedAt: now,
+        ...values,
+      })
+      .run();
+    return this.getSource(id)!;
+  }
+
+  public updateSource(
+    sourceId: string,
+    input: UpdateSourceRequest,
+    now = new Date(),
+  ): Source {
+    const current = this.getSource(sourceId);
+    if (!current) {
+      throw new SourceRepositoryError('SOURCE_NOT_FOUND', 'Source does not exist');
+    }
+
+    if (
+      (input.region !== undefined && current.config.kind !== 'lever') ||
+      (input.includeCompensation !== undefined && current.config.kind !== 'ashby') ||
+      ((input.companyName !== undefined || input.identifier !== undefined) &&
+        current.config.kind === 'jobtech')
+    ) {
+      throw new SourceRepositoryError(
+        'SOURCE_INVALID_UPDATE',
+        'This setting does not apply to the selected source type',
+      );
+    }
+
+    let config = current.config;
+    let baseUrl = current.baseUrl;
+    if (config.kind === 'greenhouse') {
+      config = greenhouseSourceConfigSchema.parse({
+        ...config,
+        ...(input.companyName ? { companyName: input.companyName } : {}),
+        ...(input.identifier ? { boardToken: input.identifier } : {}),
+      });
+    } else if (config.kind === 'lever') {
+      const region = input.region ?? config.region;
+      config = leverSourceConfigSchema.parse({
+        ...config,
+        region,
+        ...(input.companyName ? { companyName: input.companyName } : {}),
+        ...(input.identifier ? { site: input.identifier } : {}),
+      });
+      baseUrl = region === 'eu' ? 'https://api.eu.lever.co' : 'https://api.lever.co';
+    } else if (config.kind === 'ashby') {
+      config = ashbySourceConfigSchema.parse({
+        ...config,
+        ...(input.companyName ? { companyName: input.companyName } : {}),
+        ...(input.identifier ? { boardName: input.identifier } : {}),
+        ...(input.includeCompensation === undefined
+          ? {}
+          : { includeCompensation: input.includeCompensation }),
+      });
+    }
+
+    if (input.name && input.name !== current.name) {
+      const conflict = this.client.db
+        .select({ id: sources.id })
+        .from(sources)
+        .where(
+          and(
+            eq(sources.type, current.type),
+            eq(sources.name, input.name),
+            isNull(sources.deletedAt),
+          ),
+        )
+        .get();
+      if (conflict) {
+        throw new SourceRepositoryError(
+          'SOURCE_CONFLICT',
+          'A source with this type and name already exists',
+        );
+      }
+    }
+
+    this.client.db
+      .update(sources)
+      .set({
+        name: input.name ?? current.name,
+        enabled: input.enabled ?? current.enabled,
+        baseUrl,
+        config,
+        updatedAt: now,
+      })
+      .where(eq(sources.id, sourceId))
+      .run();
+    return this.getSource(sourceId)!;
+  }
+
+  public deleteSource(sourceId: string, now = new Date()): void {
+    if (!this.getSource(sourceId)) {
+      throw new SourceRepositoryError('SOURCE_NOT_FOUND', 'Source does not exist');
+    }
+    this.client.db
+      .update(sources)
+      .set({ enabled: false, deletedAt: now, updatedAt: now })
+      .where(eq(sources.id, sourceId))
+      .run();
+  }
+
+  public listSourceViews(): SourceView[] {
+    return this.listSources().map((source) => this.sourceView(source));
+  }
+
+  public getSourceView(sourceId: string): SourceView | null {
+    const source = this.getSource(sourceId);
+    return source ? this.sourceView(source) : null;
   }
 
   public getSources(sourceIds?: readonly string[]): Source[] {
@@ -178,9 +395,13 @@ export class JobRepository {
       ? this.client.db
           .select()
           .from(sources)
-          .where(inArray(sources.id, [...sourceIds]))
+          .where(and(inArray(sources.id, [...sourceIds]), isNull(sources.deletedAt)))
           .all()
-      : this.client.db.select().from(sources).where(eq(sources.enabled, true)).all();
+      : this.client.db
+          .select()
+          .from(sources)
+          .where(and(eq(sources.enabled, true), isNull(sources.deletedAt)))
+          .all();
     return rows.map(sourceFromRow);
   }
 
@@ -188,6 +409,7 @@ export class JobRepository {
     sourceId: string,
     status: SourceHealthStatus,
     errorSummary: string | null,
+    errorCategory: SourceErrorCategory | null,
     now: Date,
     recordSuccess = false,
   ): void {
@@ -196,6 +418,7 @@ export class JobRepository {
       .set({
         healthStatus: status,
         lastError: errorSummary,
+        lastErrorCategory: errorCategory,
         ...(recordSuccess ? { lastSuccessAt: now } : {}),
         updatedAt: now,
       })
@@ -289,14 +512,50 @@ export class JobRepository {
           ),
         )
         .get();
-      const canonicalKey = `${source.type}:${normalized.externalId}`;
-      const existingJob = existingSource
+      const canonicalKey = `${source.type}:${source.id}:${normalized.externalId}`;
+      let existingJob = existingSource
         ? transaction.select().from(jobs).where(eq(jobs.id, existingSource.jobId)).get()
         : transaction
             .select()
             .from(jobs)
             .where(eq(jobs.canonicalKey, canonicalKey))
             .get();
+      if (!existingJob && !existingSource) {
+        const candidates = transaction
+          .select({ job: jobs })
+          .from(jobs)
+          .innerJoin(jobSnapshots, eq(jobSnapshots.id, jobs.currentSnapshotId))
+          .where(
+            and(
+              eq(
+                sql`lower(trim(${jobs.company}))`,
+                normalized.company.trim().toLowerCase(),
+              ),
+              eq(sql`lower(trim(${jobs.title}))`, normalized.title.trim().toLowerCase()),
+              eq(
+                sql`lower(trim(${jobs.location}))`,
+                normalized.location.trim().toLowerCase(),
+              ),
+              eq(jobSnapshots.descriptionText, normalized.descriptionText),
+            ),
+          )
+          .all();
+        existingJob = candidates
+          .map(({ job }) => job)
+          .find(
+            (candidate) =>
+              !transaction
+                .select({ jobId: jobSources.jobId })
+                .from(jobSources)
+                .where(
+                  and(
+                    eq(jobSources.jobId, candidate.id),
+                    eq(jobSources.sourceId, source.id),
+                  ),
+                )
+                .get(),
+          );
+      }
       const jobId = existingJob?.id ?? randomUUID();
 
       if (!existingJob) {
@@ -348,6 +607,7 @@ export class JobRepository {
             lastSeenScanRunId: scanRunId,
             consecutiveMisses: 0,
             active: shouldBeActive,
+            sourceMetadata: normalized.sourceMetadata,
           })
           .where(and(eq(jobSources.jobId, jobId), eq(jobSources.sourceId, source.id)))
           .run();
@@ -364,9 +624,25 @@ export class JobRepository {
             lastSeenScanRunId: scanRunId,
             consecutiveMisses: 0,
             active: shouldBeActive,
+            sourceMetadata: normalized.sourceMetadata,
           })
           .run();
       }
+
+      const hasActiveSource = transaction
+        .select({ jobId: jobSources.jobId })
+        .from(jobSources)
+        .where(and(eq(jobSources.jobId, jobId), eq(jobSources.active, true)))
+        .get();
+      const active = Boolean(hasActiveSource);
+      transaction
+        .update(jobs)
+        .set({
+          active,
+          closedAt: active ? null : (existingJob?.closedAt ?? now),
+        })
+        .where(eq(jobs.id, jobId))
+        .run();
 
       const existingSnapshot = transaction
         .select()
@@ -399,7 +675,7 @@ export class JobRepository {
 
       return {
         outcome: !existingJob ? 'created' : existingSnapshot ? 'unchanged' : 'updated',
-        closed: Boolean(existingJob?.active && !shouldBeActive),
+        closed: Boolean(existingJob?.active && !active),
       };
     });
   }
@@ -410,7 +686,7 @@ export class JobRepository {
     resultSetComplete: boolean,
     now: Date,
   ): number {
-    const config = jobTechSourceConfigSchema.parse(source.config);
+    const missingThreshold = source.config.missingThreshold;
     let closed = 0;
 
     this.client.db.transaction((transaction) => {
@@ -429,7 +705,7 @@ export class JobRepository {
         const misses = link.consecutiveMisses + 1;
         transaction
           .update(jobSources)
-          .set({ consecutiveMisses: misses, active: misses < config.missingThreshold })
+          .set({ consecutiveMisses: misses, active: misses < missingThreshold })
           .where(
             and(eq(jobSources.jobId, link.jobId), eq(jobSources.sourceId, source.id)),
           )
@@ -444,9 +720,7 @@ export class JobRepository {
           .from(jobSources)
           .where(and(eq(jobSources.jobId, jobId), eq(jobSources.active, true)))
           .get();
-        const deadlinePassed =
-          job.deadline !== null && job.deadline.getTime() <= now.getTime();
-        const active = Boolean(hasActiveSource) && !deadlinePassed;
+        const active = Boolean(hasActiveSource);
         if (job.active && !active) closed += 1;
         transaction
           .update(jobs)
@@ -477,6 +751,7 @@ export class JobRepository {
         unchangedCount: input.counts.unchanged,
         closedCount: input.counts.closed,
         failedCount: input.counts.failed,
+        errorCategory: input.errorCategory,
         errorSummary: input.errorSummary,
         finishedAt: input.finishedAt,
       })
@@ -652,6 +927,7 @@ export class JobRepository {
         lastSeenAt: link.lastSeenAt.toISOString(),
         consecutiveMisses: link.consecutiveMisses,
         active: link.active,
+        sourceMetadataStored: true,
       })),
       snapshot: {
         id: snapshot.id,
@@ -710,6 +986,7 @@ export class JobRepository {
       pagesFetched: run.pagesFetched,
       retryCount: run.retryCount,
       counts: countsFromRow(run),
+      errorCategory: run.errorCategory,
       errorSummary: run.errorSummary,
       startedAt: date(run.startedAt),
       finishedAt: date(run.finishedAt),
@@ -735,6 +1012,69 @@ export class JobRepository {
       finishedAt: date(row.finishedAt),
       createdAt: row.createdAt.toISOString(),
       sourceRuns: sourceRunViews,
+    });
+  }
+
+  private sourceView(source: Source): SourceView {
+    const runs = this.client.db
+      .select()
+      .from(sourceRuns)
+      .where(eq(sourceRuns.sourceId, source.id))
+      .orderBy(desc(sourceRuns.createdAt))
+      .all();
+    const metrics = runs.reduce(
+      (total, run) => {
+        total.totalRuns += 1;
+        if (run.status === 'succeeded') total.successfulRuns += 1;
+        if (run.status === 'partial') total.partialRuns += 1;
+        if (run.status === 'failed') total.failedRuns += 1;
+        if (run.status === 'cancelled') total.cancelledRuns += 1;
+        total.totalRetries += run.retryCount;
+        total.jobsDiscovered += run.discoveredCount;
+        total.jobsFetched += run.fetchedCount;
+        total.jobsCreated += run.createdCount;
+        total.jobsUpdated += run.updatedCount;
+        total.jobsFailed += run.failedCount;
+        return total;
+      },
+      {
+        totalRuns: 0,
+        successfulRuns: 0,
+        partialRuns: 0,
+        failedRuns: 0,
+        cancelledRuns: 0,
+        totalRetries: 0,
+        jobsDiscovered: 0,
+        jobsFetched: 0,
+        jobsCreated: 0,
+        jobsUpdated: 0,
+        jobsFailed: 0,
+      },
+    );
+    const latest = runs[0];
+
+    return sourceViewSchema.parse({
+      ...source,
+      metrics,
+      latestRun: latest
+        ? {
+            id: latest.id,
+            scanRunId: latest.scanRunId,
+            sourceId: latest.sourceId,
+            sourceName: source.name,
+            status: latest.status,
+            queries: latest.queries,
+            resultSetComplete: latest.resultSetComplete,
+            pagesFetched: latest.pagesFetched,
+            retryCount: latest.retryCount,
+            counts: countsFromRow(latest),
+            errorCategory: latest.errorCategory,
+            errorSummary: latest.errorSummary,
+            startedAt: date(latest.startedAt),
+            finishedAt: date(latest.finishedAt),
+            createdAt: latest.createdAt.toISOString(),
+          }
+        : null,
     });
   }
 }

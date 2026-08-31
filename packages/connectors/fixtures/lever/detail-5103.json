@@ -1,0 +1,18 @@
+{
+  "id": "lever-fictional-5103",
+  "text": "Developer Experience Lead",
+  "createdAt": 1787301000000,
+  "hostedUrl": "https://jobs.lever.co/aurora-example/lever-fictional-5103",
+  "applyUrl": "https://jobs.lever.co/aurora-example/lever-fictional-5103/apply",
+  "description": "<p>Lead a fictional developer tooling program.</p>",
+  "descriptionPlain": "Lead a fictional developer tooling program.",
+  "lists": [
+    { "text": "Focus", "content": "<p>CI, local tooling, and documentation.</p>" }
+  ],
+  "workplaceType": "on-site",
+  "categories": {
+    "location": "Stockholm, Sweden",
+    "commitment": "Permanent",
+    "team": "Developer Experience"
+  }
+}

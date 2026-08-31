@@ -2,10 +2,11 @@ import { useState } from 'react';
 
 import { JobsWorkspace } from './features/jobs/JobsWorkspace.js';
 import { ProfileWorkspace } from './features/profile/ProfileWorkspace.js';
+import { SourcesWorkspace } from './features/sources/SourcesWorkspace.js';
 import { SystemPanel } from './features/system/SystemPanel.js';
 
 export default function App(): React.JSX.Element {
-  const [view, setView] = useState<'profile' | 'jobs' | 'system'>('profile');
+  const [view, setView] = useState<'profile' | 'jobs' | 'sources' | 'system'>('profile');
 
   return (
     <>
@@ -36,6 +37,15 @@ export default function App(): React.JSX.Element {
             Jobs
           </button>
           <button
+            className={
+              view === 'sources' ? 'nav-button nav-button--active' : 'nav-button'
+            }
+            type="button"
+            onClick={() => setView('sources')}
+          >
+            Sources
+          </button>
+          <button
             className={view === 'system' ? 'nav-button nav-button--active' : 'nav-button'}
             type="button"
             onClick={() => setView('system')}
@@ -43,13 +53,15 @@ export default function App(): React.JSX.Element {
             System
           </button>
         </nav>
-        <span className="phase-label">JobTech loop · M2</span>
+        <span className="phase-label">Public ATS · M2</span>
       </header>
       <main>
         {view === 'profile' ? (
           <ProfileWorkspace />
         ) : view === 'jobs' ? (
           <JobsWorkspace />
+        ) : view === 'sources' ? (
+          <SourcesWorkspace />
         ) : (
           <SystemPanel />
         )}

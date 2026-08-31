@@ -2,7 +2,7 @@ import { cleanup, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import type { JobDetail, JobSummary, ScanRun, Source } from '@job-radar/shared';
+import type { JobDetail, JobSummary, ScanRun, SourceView } from '@job-radar/shared';
 
 import { JobsWorkspace } from './JobsWorkspace.js';
 
@@ -40,6 +40,7 @@ const detail: JobDetail = {
       lastSeenAt: timestamp,
       consecutiveMisses: 0,
       active: true,
+      sourceMetadataStored: true,
     },
   ],
   snapshot: {
@@ -61,7 +62,7 @@ const detail: JobDetail = {
   ],
 };
 
-const source: Source = {
+const source: SourceView = {
   id: '70000000-0000-4000-8000-000000000001',
   type: 'jobtech',
   name: 'JobTech / Platsbanken',
@@ -82,9 +83,24 @@ const source: Source = {
   },
   lastSuccessAt: null,
   lastError: null,
+  lastErrorCategory: null,
   healthStatus: 'unknown',
   createdAt: timestamp,
   updatedAt: timestamp,
+  metrics: {
+    totalRuns: 0,
+    successfulRuns: 0,
+    partialRuns: 0,
+    failedRuns: 0,
+    cancelledRuns: 0,
+    totalRetries: 0,
+    jobsDiscovered: 0,
+    jobsFetched: 0,
+    jobsCreated: 0,
+    jobsUpdated: 0,
+    jobsFailed: 0,
+  },
+  latestRun: null,
 };
 
 const queuedRun: ScanRun = {
@@ -125,6 +141,7 @@ const queuedRun: ScanRun = {
         closed: 0,
         failed: 0,
       },
+      errorCategory: null,
       errorSummary: null,
       startedAt: null,
       finishedAt: null,
@@ -168,12 +185,10 @@ describe('JobsWorkspace', () => {
     await screen.findByRole('button', { name: /Product Engineer/ });
     await screen.findByText(/Complete fictional description/);
     expect(
-      screen
-        .getByRole('link', { name: /Open original JobTech listing/ })
-        .getAttribute('href'),
+      screen.getByRole('link', { name: /Open original listing/ }).getAttribute('href'),
     ).toBe(job.canonicalUrl);
 
-    await user.click(screen.getByRole('button', { name: 'Scan JobTech' }));
+    await user.click(screen.getByRole('button', { name: 'Scan sources' }));
     await waitFor(() =>
       expect(fetchMock).toHaveBeenCalledWith(
         '/api/scans',

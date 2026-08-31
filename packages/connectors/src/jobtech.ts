@@ -8,16 +8,15 @@ import {
 } from '@job-radar/shared';
 
 import {
-  ConnectorCancelledError,
   type ConnectorContext,
   type ConnectorHealthResult,
-  type ConnectorRetryEvent,
   ConnectorRequestError,
   type DiscoveredJob,
   type DiscoveryResult,
   type JobConnector,
 } from './contracts.js';
-import { abortableDelay, canonicalizeUrl } from './util.js';
+import { ConnectorHttpClient, type ConnectorHttpDependencies } from './http.js';
+import { canonicalizeUrl } from './util.js';
 
 const optionalNullableString = z.string().nullable().optional();
 const jobTechAdSchema = z
@@ -79,37 +78,7 @@ export interface JobTechDiscoveredJob extends DiscoveredJob {
   readonly rawSummary: Record<string, unknown> & { id: string };
 }
 
-export interface JobTechConnectorDependencies {
-  readonly fetch?: typeof fetch;
-  readonly now?: () => number;
-  readonly delay?: (ms: number, signal: AbortSignal) => Promise<void>;
-}
-
-class RequestGate {
-  private tail = Promise.resolve();
-  private nextAllowedAt = 0;
-
-  public constructor(
-    private readonly intervalMs: number,
-    private readonly now: () => number,
-    private readonly delay: (ms: number, signal: AbortSignal) => Promise<void>,
-  ) {}
-
-  public async wait(signal: AbortSignal): Promise<void> {
-    const previous = this.tail;
-    let release: () => void = () => undefined;
-    this.tail = new Promise<void>((resolve) => {
-      release = resolve;
-    });
-    await previous;
-    try {
-      await this.delay(Math.max(0, this.nextAllowedAt - this.now()), signal);
-      this.nextAllowedAt = this.now() + this.intervalMs;
-    } finally {
-      release();
-    }
-  }
-}
+export type JobTechConnectorDependencies = ConnectorHttpDependencies;
 
 function totalValue(total: z.infer<typeof searchResponseSchema>['total']): number | null {
   if (total === undefined) return null;
@@ -150,15 +119,10 @@ export class JobTechConnector implements JobConnector<
   Record<string, unknown>
 > {
   public readonly type = 'jobtech';
-  private readonly fetchImpl: typeof fetch;
-  private readonly now: () => number;
-  private readonly delay: (ms: number, signal: AbortSignal) => Promise<void>;
-  private readonly gates = new Map<string, RequestGate>();
+  private readonly http: ConnectorHttpClient;
 
   public constructor(dependencies: JobTechConnectorDependencies = {}) {
-    this.fetchImpl = dependencies.fetch ?? fetch;
-    this.now = dependencies.now ?? Date.now;
-    this.delay = dependencies.delay ?? abortableDelay;
+    this.http = new ConnectorHttpClient(dependencies);
   }
 
   public async healthCheck(context: ConnectorContext): Promise<ConnectorHealthResult> {
@@ -232,6 +196,7 @@ export class JobTechConnector implements JobConnector<
     if (!descriptionText) {
       throw new ConnectorRequestError(
         'JobTech detail did not contain a full description',
+        'invalid_response',
       );
     }
 
@@ -252,6 +217,10 @@ export class JobTechConnector implements JobConnector<
       remoteMode: inferRemoteMode(descriptionText, ad.remote_work),
       employmentType: ad.employment_type?.label?.trim() || null,
       sourceActive: ad.removed !== true,
+      sourceMetadata: {
+        externalId: ad.external_id ?? null,
+        workplace: ad.employer?.workplace ?? null,
+      },
       rawData: ad,
     });
   }
@@ -273,72 +242,12 @@ export class JobTechConnector implements JobConnector<
     return url;
   }
 
-  private gate(sourceId: string, config: JobTechSourceConfig): RequestGate {
-    const existing = this.gates.get(sourceId);
-    if (existing) return existing;
-    const gate = new RequestGate(config.minRequestIntervalMs, this.now, this.delay);
-    this.gates.set(sourceId, gate);
-    return gate;
-  }
-
   private async requestJson(
     url: URL,
     config: JobTechSourceConfig,
     context: ConnectorContext,
-    operation: ConnectorRetryEvent['operation'],
+    operation: 'health' | 'discover' | 'detail',
   ): Promise<unknown> {
-    let retryStatusCode: number | undefined;
-    for (let attempt = 0; attempt <= config.maxRetries; attempt += 1) {
-      if (context.signal.aborted) throw new ConnectorCancelledError();
-      if (attempt > 0) {
-        context.onRetry({
-          operation,
-          attempt,
-          ...(retryStatusCode === undefined ? {} : { statusCode: retryStatusCode }),
-        });
-        await this.delay(config.retryBaseDelayMs * 2 ** (attempt - 1), context.signal);
-      }
-
-      await this.gate(context.source.id, config).wait(context.signal);
-      const timeoutController = new AbortController();
-      const timeout = setTimeout(
-        () => timeoutController.abort(),
-        config.requestTimeoutMs,
-      );
-      const signal = AbortSignal.any([context.signal, timeoutController.signal]);
-
-      try {
-        const response = await this.fetchImpl(url, {
-          headers: { accept: 'application/json', 'user-agent': config.userAgent },
-          signal,
-        });
-        if (response.ok) return response.json();
-
-        const retryable =
-          response.status === 408 ||
-          response.status === 425 ||
-          response.status === 429 ||
-          response.status >= 500;
-        if (!retryable || attempt === config.maxRetries) {
-          throw new ConnectorRequestError(
-            `JobTech request failed with HTTP ${response.status}`,
-            response.status,
-          );
-        }
-        retryStatusCode = response.status;
-      } catch (error) {
-        if (context.signal.aborted) throw new ConnectorCancelledError();
-        if (error instanceof ConnectorRequestError) throw error;
-        if (attempt === config.maxRetries) {
-          const reason = timeoutController.signal.aborted ? 'timed out' : 'failed';
-          throw new ConnectorRequestError(`JobTech request ${reason}`);
-        }
-        retryStatusCode = undefined;
-      } finally {
-        clearTimeout(timeout);
-      }
-    }
-
-    throw new ConnectorRequestError('JobTech request failed');
+    return this.http.requestJson('JobTech', url, config, context, operation);
   }
 }

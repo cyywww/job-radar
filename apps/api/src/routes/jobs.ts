@@ -1,9 +1,10 @@
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 
-import { JobRepository, type DatabaseClient } from '@job-radar/db';
+import { JobRepository, SourceRepositoryError, type DatabaseClient } from '@job-radar/db';
 import {
   AppError,
+  createSourceRequestSchema,
   createScanRequestSchema,
   jobDetailSchema,
   jobsQuerySchema,
@@ -11,7 +12,10 @@ import {
   scanRunSchema,
   scansQuerySchema,
   scansResponseSchema,
+  sourceTestResultSchema,
+  sourceViewSchema,
   sourcesResponseSchema,
+  updateSourceRequestSchema,
 } from '@job-radar/shared';
 
 import { ScanCoordinator, ScanCoordinatorError } from '../services/scan-coordinator.js';
@@ -29,6 +33,17 @@ function mapCoordinatorError(error: unknown): never {
   throw new AppError(error.code, error.message, statusCode);
 }
 
+function mapSourceError(error: unknown): never {
+  if (!(error instanceof SourceRepositoryError)) throw error;
+  const statusCode =
+    error.code === 'SOURCE_NOT_FOUND'
+      ? 404
+      : error.code === 'SOURCE_CONFLICT'
+        ? 409
+        : 400;
+  throw new AppError(error.code, error.message, statusCode);
+}
+
 export async function registerJobRoutes(
   app: FastifyInstance,
   database: DatabaseClient,
@@ -39,6 +54,47 @@ export async function registerJobRoutes(
   app.get('/api/sources', async () =>
     sourcesResponseSchema.parse({ sources: coordinator.listSources() }),
   );
+
+  app.post('/api/sources', async (request, reply) => {
+    try {
+      const source = coordinator.createSource(
+        createSourceRequestSchema.parse(request.body),
+      );
+      return reply.status(201).send(sourceViewSchema.parse(source));
+    } catch (error) {
+      return mapSourceError(error);
+    }
+  });
+
+  app.patch('/api/sources/:id', async (request) => {
+    try {
+      const { id } = idParamsSchema.parse(request.params);
+      return sourceViewSchema.parse(
+        coordinator.updateSource(id, updateSourceRequestSchema.parse(request.body)),
+      );
+    } catch (error) {
+      return mapSourceError(error);
+    }
+  });
+
+  app.delete('/api/sources/:id', async (request, reply) => {
+    try {
+      const { id } = idParamsSchema.parse(request.params);
+      coordinator.deleteSource(id);
+      return reply.status(204).send();
+    } catch (error) {
+      return mapSourceError(error);
+    }
+  });
+
+  app.post('/api/sources/:id/test', async (request) => {
+    try {
+      const { id } = idParamsSchema.parse(request.params);
+      return sourceTestResultSchema.parse(await coordinator.testSource(id));
+    } catch (error) {
+      return mapSourceError(error);
+    }
+  });
 
   app.post('/api/scans', async (request, reply) => {
     try {

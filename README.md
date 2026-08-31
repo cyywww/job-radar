@@ -1,8 +1,9 @@
 # Job Radar
 
-Job Radar is a local-first job-search workspace. The current milestone is M2: an
-evidence-backed candidate Profile plus a first complete JobTech collection loop across
-search, full-detail normalization, SQLite history, API queries, and browser review.
+Job Radar is a local-first job-search workspace. The current milestone is the Phase 4
+structured-source slice: an evidence-backed candidate Profile plus JobTech, Greenhouse,
+Lever, and Ashby collection across full-detail normalization, SQLite history, source
+health, API queries, and browser review.
 
 No real profile, resume, credentials, captured job data, AI scoring, or application
 tracking data is included in this repository. Tests and examples use fictional people,
@@ -40,8 +41,9 @@ or for Codex CLI to run from the repository root:
 - Health: `http://127.0.0.1:8787/api/health`
 
 Open the web URL to create or edit the local Profile, confirm at least one target role,
-then use Jobs to start a JobTech scan and inspect run status, normalized metadata, and the
-complete locally stored description. The System tab retains API/database health.
+then use Sources to configure and test public ATS boards. Jobs starts all enabled sources
+and shows per-source run status, normalized metadata, and the complete locally stored
+description. The System tab retains API/database health.
 
 Stop both processes with `Ctrl+C`. Use `pnpm dev:api` or `pnpm dev:web` to run only one
 side during focused development.
@@ -90,22 +92,31 @@ Profile API contracts are exported from `@job-radar/shared`. Primary routes are:
 - `POST /api/preferences/preview`
 - `POST /api/profile/import` and `POST /api/profile/import/file`
 
-## JobTech collection
+## Structured-source collection
 
-The first source is the official JobTech JobSearch API. A scan uses confirmed target roles
-only, paginates search results, fetches `/ad/{id}` for every complete description, and
-stores an auditable immutable snapshot. The default connector has bounded retries,
-timeouts, rate and concurrency limits, plus cancellation.
+The default source is the official JobTech JobSearch API. User-configured sources support
+the public Greenhouse Job Board API, Lever Postings API (global or EU), and Ashby Job
+Postings API. Every connector uses bounded retries, timeouts, start-rate and concurrency
+limits, cancellation, typed response validation, and safe error categories. No connector
+uses credentials, browser automation, CAPTCHA bypass, or an undocumented scraping route.
+
+The Sources browser workspace can add/configure, test, pause/enable, and delete sources.
+Deletion is soft so historical runs and job provenance remain auditable. Each source shows
+health, a friendly error, aggregate counters, and the latest run. Only fixed API origins
+can be configured; users provide the public board/site identifier, not an arbitrary URL.
 
 Primary M2 routes are:
 
-- `GET /api/sources`
+- `GET` and `POST /api/sources`
+- `PATCH` and `DELETE /api/sources/:id`
+- `POST /api/sources/:id/test`
 - `POST /api/scans`, `GET /api/scans`, and `GET /api/scans/:id`
 - `POST /api/scans/:id/cancel`
 - `GET /api/jobs` and `GET /api/jobs/:id`
 
-Default tests use fixed fictional JSON and never require JobTech network access. See
-`docs/connectors.md` for lifecycle safety and the interface new ATS connectors must use.
+Default tests use fixed fictional JSON and never require network access. See
+`docs/connectors.md` for each connector's exact public endpoint, support limits, lifecycle
+safety, and the reusable connector contract test kit.
 
 ## Quality checks
 
@@ -118,8 +129,8 @@ pnpm build
 ```
 
 Run the complete project gate with `pnpm check`. Tests use temporary SQLite databases
-and contain only fictional/system data. The web suite covers both Profile versioning and
-the Jobs list/detail plus scan trigger.
+and contain only fictional/system data. The web suite covers Profile versioning, the Jobs
+list/detail and scan trigger, plus the complete Sources management flow.
 
 ## Production-style local run
 

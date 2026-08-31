@@ -9,7 +9,7 @@ import {
   uniqueIndex,
 } from 'drizzle-orm/sqlite-core';
 
-import type { SourceConfig } from '@job-radar/shared';
+import type { SourceConfig, SourceErrorCategory } from '@job-radar/shared';
 
 export const systemMetadata = sqliteTable('system_metadata', {
   key: text('key').primaryKey(),
@@ -135,14 +135,18 @@ export const sources = sqliteTable(
     config: text('config_json', { mode: 'json' }).$type<SourceConfig>().notNull(),
     lastSuccessAt: integer('last_success_at', { mode: 'timestamp_ms' }),
     lastError: text('last_error'),
+    lastErrorCategory: text('last_error_category').$type<SourceErrorCategory>(),
     healthStatus: text('health_status', {
       enum: ['unknown', 'healthy', 'degraded', 'unavailable'],
     }).notNull(),
     createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull(),
     updatedAt: integer('updated_at', { mode: 'timestamp_ms' }).notNull(),
+    deletedAt: integer('deleted_at', { mode: 'timestamp_ms' }),
   },
   (table) => [
-    uniqueIndex('sources_type_name_uq').on(table.type, table.name),
+    uniqueIndex('sources_type_name_uq')
+      .on(table.type, table.name)
+      .where(sql`${table.deletedAt} is null`),
     index('sources_enabled_idx').on(table.enabled),
   ],
 );
@@ -199,6 +203,7 @@ export const sourceRuns = sqliteTable(
     unchangedCount: integer('unchanged_count').notNull().default(0),
     closedCount: integer('closed_count').notNull().default(0),
     failedCount: integer('failed_count').notNull().default(0),
+    errorCategory: text('error_category').$type<SourceErrorCategory>(),
     errorSummary: text('error_summary'),
     startedAt: integer('started_at', { mode: 'timestamp_ms' }),
     finishedAt: integer('finished_at', { mode: 'timestamp_ms' }),
@@ -258,6 +263,10 @@ export const jobSources = sqliteTable(
       .references(() => scanRuns.id, { onDelete: 'restrict' }),
     consecutiveMisses: integer('consecutive_misses').notNull().default(0),
     active: integer('active', { mode: 'boolean' }).notNull(),
+    sourceMetadata: text('source_metadata_json', { mode: 'json' })
+      .$type<Record<string, unknown>>()
+      .notNull()
+      .default(sql`'{}'`),
   },
   (table) => [
     primaryKey({ columns: [table.jobId, table.sourceId] }),

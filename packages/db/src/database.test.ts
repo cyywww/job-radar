@@ -49,6 +49,20 @@ describe('database infrastructure', () => {
       .all(...expectedTables) as Array<{ name: string }>;
 
     expect(tables.map(({ name }) => name).sort()).toEqual(expectedTables.sort());
+    const sourceColumns = database.sqlite.pragma('table_info(sources)') as Array<{
+      name: string;
+    }>;
+    const sourceRunColumns = database.sqlite.pragma('table_info(source_runs)') as Array<{
+      name: string;
+    }>;
+    const jobSourceColumns = database.sqlite.pragma('table_info(job_sources)') as Array<{
+      name: string;
+    }>;
+    expect(sourceColumns.map(({ name }) => name)).toEqual(
+      expect.arrayContaining(['last_error_category', 'deleted_at']),
+    );
+    expect(sourceRunColumns.map(({ name }) => name)).toContain('error_category');
+    expect(jobSourceColumns.map(({ name }) => name)).toContain('source_metadata_json');
     expect(database.sqlite.pragma('integrity_check', { simple: true })).toBe('ok');
     expect(database.sqlite.pragma('foreign_key_check')).toEqual([]);
     expect(checkDatabase(database).status).toBe('ok');

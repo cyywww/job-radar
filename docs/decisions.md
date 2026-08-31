@@ -139,3 +139,48 @@ concatenated into free text because that would produce unstable relevance and is
 substitute for JobTech Taxonomy geographic IDs. Structured location mapping is deferred;
 the stored job location and complete confirmed preferences remain available for that
 adapter improvement and later deterministic Gates.
+
+## ADR-020: public ATS configuration selects fixed official origins
+
+Greenhouse, Lever, and Ashby sources accept a bounded board/site identifier and company
+label rather than an arbitrary base URL. The server selects the official public JSON
+origin (including Lever global/EU). This keeps the browser workflow simple and avoids
+turning source testing into a general-purpose SSRF client. The current connectors use no
+credentials, HTML scraping, login bypass, or CAPTCHA handling.
+
+## ADR-021: one shared transport policy classifies connector failures
+
+Every connector uses the same request gate, timeout, capped retries, bounded Retry-After,
+User-Agent, cancellation, and safe JSON parsing. A durable error category is stored on the
+source and SourceRun while the summary omits response bodies, headers, queries, Profile
+data, and job descriptions. This makes UI errors actionable without source-specific
+logging behavior or privacy drift.
+
+## ADR-022: source deletion preserves collection provenance
+
+`DELETE /api/sources/:id` sets `deleted_at` and disables the source. Normal configuration
+queries hide deleted rows, but SourceRuns, JobSources, snapshots, and historical scan
+views remain valid. The active source name uniqueness constraint is partial so a deleted
+configuration can later be recreated deliberately.
+
+## ADR-023: ATS fields stay on source records and raw snapshots
+
+`NormalizedJob` has a source-metadata boundary in addition to the complete raw detail.
+JobSource stores the bounded ATS metadata JSON while JobSnapshot stores the full parsed
+detail wrapper. Core Job fields remain source-neutral. Normal job APIs expose only that
+source metadata and the raw response were stored, never the raw objects themselves.
+
+## ADR-024: cross-source matching starts with exact complete-content evidence
+
+A new source link can merge with an existing Job only when normalized company, title,
+location, and complete plain-text description all match. Per-source identity remains
+`(source_id, source_job_id)`, and canonical keys are source-scoped. This is intentionally
+more conservative than fuzzy title matching; broader similarity matching requires a
+separate reviewed policy and eval set.
+
+## ADR-025: source metrics are derived from durable runs
+
+The Sources API computes aggregate successes, failures, retries, and job counters from
+SourceRun rows and returns the latest SourceRun alongside Source health. No parallel
+in-memory metrics store is introduced. Metrics therefore remain consistent with audit
+history and survive restarts at local scale.

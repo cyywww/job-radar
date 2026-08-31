@@ -1,6 +1,24 @@
 import { describe, expect, it } from 'vitest';
 
-import { jobTechSourceConfigSchema, normalizedJobSchema, scanRunSchema } from './jobs.js';
+import {
+  ashbySourceConfigSchema,
+  createSourceRequestSchema,
+  greenhouseSourceConfigSchema,
+  jobTechSourceConfigSchema,
+  leverSourceConfigSchema,
+  normalizedJobSchema,
+  scanRunSchema,
+} from './jobs.js';
+
+const requestPolicy = {
+  detailConcurrency: 2,
+  requestTimeoutMs: 1_000,
+  maxRetries: 2,
+  retryBaseDelayMs: 100,
+  minRequestIntervalMs: 0,
+  missingThreshold: 3,
+  userAgent: 'Job-Radar-Test/1.0',
+};
 
 describe('job collection contracts', () => {
   it('bounds JobTech pagination, retries, and concurrency', () => {
@@ -21,6 +39,45 @@ describe('job collection contracts', () => {
     ).toThrow();
   });
 
+  it('keeps each ATS identifier and request policy strictly bounded', () => {
+    expect(
+      greenhouseSourceConfigSchema.parse({
+        kind: 'greenhouse',
+        boardToken: 'northstar-example',
+        companyName: 'Northstar Example AB',
+        ...requestPolicy,
+      }).boardToken,
+    ).toBe('northstar-example');
+    expect(
+      leverSourceConfigSchema.parse({
+        kind: 'lever',
+        site: 'northstar-example',
+        companyName: 'Northstar Example AB',
+        region: 'eu',
+        pageSize: 50,
+        maxPages: 10,
+        ...requestPolicy,
+      }).region,
+    ).toBe('eu');
+    expect(
+      ashbySourceConfigSchema.parse({
+        kind: 'ashby',
+        boardName: 'northstar-example',
+        companyName: 'Northstar Example AB',
+        includeCompensation: true,
+        ...requestPolicy,
+      }).includeCompensation,
+    ).toBe(true);
+    expect(() =>
+      createSourceRequestSchema.parse({
+        type: 'ashby',
+        name: 'Unsafe path fixture',
+        companyName: 'Northstar Example AB',
+        identifier: '../private-board',
+      }),
+    ).toThrow();
+  });
+
   it('requires a complete normalized description and auditable raw data', () => {
     expect(() =>
       normalizedJobSchema.parse({
@@ -37,6 +94,7 @@ describe('job collection contracts', () => {
         remoteMode: 'unknown',
         employmentType: null,
         sourceActive: true,
+        sourceMetadata: {},
         rawData: {},
       }),
     ).toThrow();
