@@ -141,7 +141,17 @@ describe('profile onboarding browser flow', () => {
     render(<App />);
 
     await user.click(screen.getByRole('button', { name: 'Profile' }));
-    await screen.findByRole('heading', { name: 'Build your trusted profile.' });
+    await screen.findByRole('heading', { name: 'Your profile' });
+    expect(screen.getByRole('heading', { name: 'Your search' })).toBeTruthy();
+    expect(screen.getByRole('heading', { name: 'Your fit' })).toBeTruthy();
+    expect(screen.getByRole('heading', { name: 'Evidence' })).toBeTruthy();
+    expect(screen.queryByLabelText('Evidence source')).toBeNull();
+    expect(
+      screen
+        .getByText('Optional search filters')
+        .closest('details')
+        ?.hasAttribute('open'),
+    ).toBe(false);
     await user.type(screen.getByLabelText('Display name'), 'Robin North');
     await user.type(screen.getByLabelText('Current location'), 'Stockholm');
     await user.type(screen.getByLabelText('Professional summary'), 'Fictional engineer.');
@@ -153,8 +163,12 @@ describe('profile onboarding browser flow', () => {
       'work_permit',
     );
     await user.type(screen.getByLabelText('Authorized countries'), 'Sweden');
+    await user.type(screen.getByLabelText('Core skills'), 'TypeScript\nSQL');
+    await user.tab();
+    await user.click(screen.getByText('Optional search filters'));
     await user.type(screen.getByLabelText('Hard exclusions'), 'Unpaid roles');
-    expect(screen.getByRole('heading', { name: '1 search lane' })).toBeTruthy();
+    await user.tab();
+    expect(screen.getByText('1 active role lane')).toBeTruthy();
     await user.click(screen.getByRole('button', { name: /^Create profile$/ }));
 
     await screen.findByText(/Saved as version 1/);
@@ -164,15 +178,20 @@ describe('profile onboarding browser flow', () => {
         data: { targetRoles: ['Product Engineer'], exclusions: ['Unpaid roles'] },
         confirmationStatus: 'confirmed',
       },
+      skills: [
+        { data: { name: 'TypeScript', level: 'working' } },
+        { data: { name: 'SQL', level: 'working' } },
+      ],
     });
 
-    await user.type(screen.getByLabelText('Headline'), 'Fictional product engineer');
+    await user.type(
+      screen.getByLabelText('Professional headline'),
+      'Fictional product engineer',
+    );
     await user.click(screen.getByRole('button', { name: 'Save new version' }));
 
     await screen.findByText(/Saved as version 2/);
     expect(savedRequests[1]).toMatchObject({ baseVersion: 1 });
-    await waitFor(() =>
-      expect(screen.getByRole('heading', { name: '2 saved versions' })).toBeTruthy(),
-    );
+    await waitFor(() => expect(screen.getByText(/2 saved versions/)).toBeTruthy());
   });
 });

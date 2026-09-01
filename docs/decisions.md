@@ -387,3 +387,19 @@ input/cached/output/reasoning counts; cached and reasoning subsets are not doubl
 in the displayed total. The browser processes one attempt per explicit click. This adapts
 the bounded manual-run lesson from `job-scan` without adding its scheduler or pretending
 Codex has an unsupported hard USD/output-token flag.
+
+## ADR-046: Profile onboarding emphasizes minimum useful input
+
+The browser presents Profile editing as three primary tasks: define the search, describe
+the candidate's fit, and add recent evidence. Required and recommended inputs remain
+visible, while salary/commute preferences, supporting credentials, deterministic import,
+Gate preview, and version/provenance history use native progressive disclosure. Routine
+editing no longer asks the user to choose internal evidence sources or confirmation states;
+direct input is confirmed with the local manual source and imported facts retain the
+existing explicit confirmation action.
+
+This adopts the useful short-profile and separate-preferences lesson from `job-scan`
+without copying its scheduler or AI workflow. The full shared Profile schema, immutable
+versions, stored provenance, completeness calculation, and confirmed-only M2/M3 boundary
+remain unchanged, so the simpler UI does not discard existing data or weaken scoring
+evidence rules.

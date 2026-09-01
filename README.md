@@ -29,13 +29,19 @@ starts the migration-first API and web processes:
 - API: `http://127.0.0.1:8787`
 - Health: `http://127.0.0.1:8787/api/health`
 
-Create and confirm a local Profile with at least one target role. Dashboard then summarizes
-today's additions, strong matches, pending scoring/review, closed jobs, source health, the
-latest run, and the top ten ranked roles. Jobs is the daily review workspace: it provides
-table/card views, bounded search/filter/sort queries, saved browser-local filters, explicit
-score states, full evidence-backed detail, persistent triage with undo, human review and
-separate correction feedback. Sources keeps JobTech / Platsbanken primary and allows only
-selected company career pages as a limited supplement.
+Create a local Profile through three focused sections: search intent, matching facts, and
+recent evidence. Required and recommended inputs are labeled; salary, commute, supporting
+credentials, import, Gate preview, and history stay collapsed until needed. Saving still
+creates an immutable local version, and evidence provenance remains available without
+asking the user to edit internal source metadata. Add at least one target role before a
+scan.
+
+Dashboard then summarizes today's additions, strong matches, pending scoring/review,
+closed jobs, source health, the latest run, and the top ten ranked roles. Jobs is the daily
+review workspace: it provides table/card views, bounded search/filter/sort queries, saved
+browser-local filters, explicit score states, full evidence-backed detail, persistent
+triage with undo, human review and separate correction feedback. Sources keeps JobTech /
+Platsbanken primary and allows only selected company career pages as a limited supplement.
 
 Scoring remains deliberately explicit rather than a resident background service. A scan or
 Profile edit creates idempotent pending tasks, but Codex CLI extraction runs only when the

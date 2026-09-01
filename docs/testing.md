@@ -33,11 +33,13 @@ default suite never starts a real Codex CLI process.
   review isolation, job refresh, persisted run stages/counts, SSE
   initial/progress/terminal state, disconnect cleanup, terminal reconnect, and SSE data
   minimization.
-- React tests cover Profile onboarding/versioning; Dashboard metrics/top jobs/actions;
-  Jobs table/card views, filters/sort/save/restore/clear, formal match versus ranking, Gate
-  failure versus zero, evidence/gaps/unknowns/version detail and review history, plain-text
-  hostile JD and non-HTTP link rendering, optimistic triage/exact undo, keyboard focus,
-  bulk actions, human review and suggested-score separation; and target-page
+- React tests cover the focused Profile onboarding/versioning path, required search and fit
+  inputs, quick skill entry, collapsed optional filters, and removal of routine provenance
+  controls; Dashboard metrics/top jobs/actions; Jobs table/card views,
+  filters/sort/save/restore/clear, formal match versus ranking, Gate failure versus zero,
+  evidence/gaps/unknowns/version detail and review history, plain-text hostile JD and
+  non-HTTP link rendering, optimistic triage/exact undo, keyboard focus, bulk actions,
+  human review and suggested-score separation; and target-page
   add/test/edit/pause/enable/delete operations with source support level/health/history.
 - Scoring Gate table tests cover pass, fail, and unknown outcomes for closure, exclusions,
   authorization/sponsorship/citizenship, location/work mode/remote scope, required
@@ -85,7 +87,9 @@ offline eval passed 34/34 cases. `pnpm lint`, formatting, typecheck, tests, buil
 `pnpm check`, diff checks, empty/M2/M3-populated migrations, SQLite integrity/foreign keys,
 and production-style loopback checks passed. No Playwright dependency or unused E2E
 scaffold was added; the core workflow is covered at repository, API integration, and React
-interaction boundaries.
+interaction boundaries. The Profile page was also exercised in the built application at
+desktop and 390 px widths with a disposable database and fictional inputs; optional groups
+stayed collapsed until activated and saving created a durable immutable version.
 
 ## Migration checks
 

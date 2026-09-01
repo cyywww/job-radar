@@ -4,95 +4,63 @@ import type { CreateProfileRequest } from '@job-radar/shared';
 
 import { ensureManualSource, newFactId } from './profile-draft.js';
 
-type FactMetaValue = {
-  sourceId: string;
-  confirmationStatus: 'pending' | 'confirmed' | 'rejected';
-  evidenceExcerpt?: string | undefined;
+type EditorProps = {
+  draft: CreateProfileRequest;
+  onChange: (draft: CreateProfileRequest) => void;
 };
 
 function splitList(value: string): string[] {
-  return value
-    .split(/[\n,]/)
-    .map((item) => item.trim())
-    .filter(Boolean);
+  return [
+    ...new Set(
+      value
+        .split(/[\n,]/)
+        .map((item) => item.trim())
+        .filter(Boolean),
+    ),
+  ];
 }
 
-function FactMeta({
-  value,
-  draft,
-  onChange,
-}: {
-  value: FactMetaValue;
-  draft: CreateProfileRequest;
-  onChange: (value: FactMetaValue) => void;
-}): React.JSX.Element {
-  return (
-    <div className="fact-meta">
-      <label>
-        Evidence source
-        <select
-          value={value.sourceId}
-          onChange={(event) => onChange({ ...value, sourceId: event.target.value })}
-        >
-          {draft.sources.map((source) => (
-            <option key={source.id} value={source.id}>
-              {source.label}
-            </option>
-          ))}
-        </select>
-      </label>
-      <label>
-        Confirmation
-        <select
-          aria-label="Confirmation status"
-          value={value.confirmationStatus}
-          onChange={(event) =>
-            onChange({
-              ...value,
-              confirmationStatus: event.target
-                .value as FactMetaValue['confirmationStatus'],
-            })
-          }
-        >
-          <option value="pending">Pending review</option>
-          <option value="confirmed">Confirmed by me</option>
-          <option value="rejected">Rejected</option>
-        </select>
-      </label>
-      <label className="fact-meta__excerpt">
-        Evidence note
-        <input
-          value={value.evidenceExcerpt ?? ''}
-          maxLength={500}
-          placeholder="Optional short provenance note"
-          onChange={(event) =>
-            onChange({ ...value, evidenceExcerpt: event.target.value || undefined })
-          }
-        />
-      </label>
-    </div>
-  );
+function replaceAt<T>(items: T[], index: number, update: (item: T) => T): T[] {
+  return items.map((item, itemIndex) => (itemIndex === index ? update(item) : item));
 }
 
-function ListField({
-  label,
-  value,
-  onChange,
-  placeholder,
-}: {
+function removeAt<T>(items: T[], index: number): T[] {
+  return items.filter((_item, itemIndex) => itemIndex !== index);
+}
+
+type ListFieldProps = {
   label: string;
   value: string[];
   onChange: (value: string[]) => void;
   placeholder: string;
+  help?: string;
+  priority?: 'Required' | 'Recommended' | 'Optional';
+  rows?: number;
+};
+
+function ListFieldInput({
+  label,
+  initialText,
+  onChange,
+  placeholder,
+  help,
+  priority,
+  rows = 3,
+}: Omit<ListFieldProps, 'value'> & {
+  initialText: string;
 }): React.JSX.Element {
-  const canonicalValue = value.join('\n');
-  const [text, setText] = useState(canonicalValue);
+  const [text, setText] = useState(initialText);
 
   return (
     <label>
-      {label}
+      <span className="field-label">
+        {label}
+        {priority && <small>{priority}</small>}
+      </span>
+      {help && <span className="field-help">{help}</span>}
       <textarea
-        rows={3}
+        aria-label={label}
+        rows={rows}
         value={text}
         placeholder={placeholder}
         onChange={(event) => setText(event.target.value)}
@@ -102,67 +70,219 @@ function ListField({
   );
 }
 
+function ListField(props: ListFieldProps): React.JSX.Element {
+  const initialText = props.value.join('\n');
+  return <ListFieldInput key={initialText} {...props} initialText={initialText} />;
+}
+
+function SectionHeading({
+  id,
+  step,
+  title,
+  description,
+  state,
+}: {
+  id: string;
+  step: string;
+  title: string;
+  description: string;
+  state?: 'pending' | 'confirmed' | 'rejected';
+}): React.JSX.Element {
+  return (
+    <div className="section-title section-title--profile">
+      <div>
+        <span>{step}</span>
+        <div>
+          <h2 id={id}>{title}</h2>
+          <p>{description}</p>
+        </div>
+      </div>
+      {state && <span className={`fact-state fact-state--${state}`}>{state}</span>}
+    </div>
+  );
+}
+
 function EmptyHint({ children }: { children: string }): React.JSX.Element {
   return <p className="empty-hint">{children}</p>;
 }
 
-export function ProfileEditor({
-  draft,
-  onChange,
-}: {
-  draft: CreateProfileRequest;
-  onChange: (draft: CreateProfileRequest) => void;
-}): React.JSX.Element {
-  const addWork = () => {
-    const manual = ensureManualSource(draft);
-    onChange({
-      ...manual.draft,
-      workExperiences: [
-        ...manual.draft.workExperiences,
-        {
-          id: newFactId(),
-          sourceId: manual.sourceId,
-          confirmationStatus: 'confirmed',
-          data: {
-            organization: '',
-            title: '',
-            startDate: '2024-01',
-            current: false,
-          },
-        },
-      ],
-    });
-  };
+function SearchSection({ draft, onChange }: EditorProps): React.JSX.Element {
+  const preferences = draft.preferences.data;
 
-  const addEducation = () => {
-    const manual = ensureManualSource(draft);
-    onChange({
-      ...manual.draft,
-      educationExperiences: [
-        ...manual.draft.educationExperiences,
-        {
-          id: newFactId(),
-          sourceId: manual.sourceId,
-          confirmationStatus: 'confirmed',
-          data: { institution: '', degree: '' },
-        },
-      ],
-    });
-  };
+  return (
+    <section
+      className="editor-section editor-section--essential"
+      aria-labelledby="search-profile-heading"
+    >
+      <SectionHeading
+        id="search-profile-heading"
+        step="01"
+        title="Your search"
+        description="Only the choices needed to find and gate relevant jobs."
+        state={draft.preferences.confirmationStatus}
+      />
+      <div className="form-grid form-grid--two">
+        <ListField
+          label="Target roles"
+          value={preferences.targetRoles}
+          placeholder={'Backend Engineer\nData Engineer'}
+          help="Use titles you would genuinely apply for, one per line."
+          priority="Required"
+          onChange={(targetRoles) =>
+            onChange({
+              ...draft,
+              preferences: {
+                ...draft.preferences,
+                data: { ...preferences, targetRoles },
+              },
+            })
+          }
+        />
+        <ListField
+          label="Target locations"
+          value={preferences.targetLocations}
+          placeholder={'Stockholm\nRemote within Sweden'}
+          help="Cities, regions, or a clear remote boundary."
+          priority="Required"
+          onChange={(targetLocations) =>
+            onChange({
+              ...draft,
+              preferences: {
+                ...draft.preferences,
+                data: { ...preferences, targetLocations },
+              },
+            })
+          }
+        />
+        <fieldset className="choice-group form-grid__wide">
+          <legend>
+            Work mode <small>Required</small>
+          </legend>
+          {(['onsite', 'hybrid', 'remote'] as const).map((mode) => (
+            <label key={mode}>
+              <input
+                type="checkbox"
+                checked={preferences.workModes.includes(mode)}
+                onChange={(event) => {
+                  const workModes = event.target.checked
+                    ? [...preferences.workModes, mode]
+                    : preferences.workModes.filter((item) => item !== mode);
+                  onChange({
+                    ...draft,
+                    preferences: {
+                      ...draft.preferences,
+                      data: { ...preferences, workModes },
+                    },
+                  });
+                }}
+              />
+              {mode}
+            </label>
+          ))}
+        </fieldset>
+        <label>
+          <span className="field-label">
+            Work authorization <small>Required</small>
+          </span>
+          <span className="field-help">Used only for eligibility checks.</span>
+          <select
+            aria-label="Work authorization status"
+            value={preferences.workAuthorization.status}
+            onChange={(event) =>
+              onChange({
+                ...draft,
+                preferences: {
+                  ...draft.preferences,
+                  data: {
+                    ...preferences,
+                    workAuthorization: {
+                      ...preferences.workAuthorization,
+                      status: event.target
+                        .value as typeof preferences.workAuthorization.status,
+                    },
+                  },
+                },
+              })
+            }
+          >
+            <option value="unknown">Not specified</option>
+            <option value="citizen">Citizen</option>
+            <option value="permanent_resident">Permanent resident</option>
+            <option value="work_permit">Work permit</option>
+            <option value="needs_sponsorship">Needs sponsorship</option>
+          </select>
+        </label>
+        <ListField
+          label="Authorized countries"
+          value={preferences.workAuthorization.countries}
+          placeholder="Sweden"
+          help="Countries where you can currently work."
+          rows={2}
+          onChange={(countries) =>
+            onChange({
+              ...draft,
+              preferences: {
+                ...draft.preferences,
+                data: {
+                  ...preferences,
+                  workAuthorization: { ...preferences.workAuthorization, countries },
+                },
+              },
+            })
+          }
+        />
+        <label className="checkbox-field form-grid__wide">
+          <input
+            type="checkbox"
+            checked={preferences.workAuthorization.needsSponsorship}
+            onChange={(event) =>
+              onChange({
+                ...draft,
+                preferences: {
+                  ...draft.preferences,
+                  data: {
+                    ...preferences,
+                    workAuthorization: {
+                      ...preferences.workAuthorization,
+                      needsSponsorship: event.target.checked,
+                    },
+                  },
+                },
+              })
+            }
+          />
+          I need employer sponsorship for my target jobs
+        </label>
+      </div>
+    </section>
+  );
+}
 
-  const addSkill = () => {
+function FitSection({ draft, onChange }: EditorProps): React.JSX.Element {
+  const updateSkills = (names: string[]) => {
+    const unchanged =
+      names.length === draft.skills.length &&
+      names.every((name, index) => name === draft.skills[index]?.data.name);
+    if (unchanged) return;
+
     const manual = ensureManualSource(draft);
+    const existing = new Map(
+      draft.skills.map((fact) => [fact.data.name.toLocaleLowerCase(), fact]),
+    );
     onChange({
       ...manual.draft,
-      skills: [
-        ...manual.draft.skills,
-        {
-          id: newFactId(),
-          sourceId: manual.sourceId,
-          confirmationStatus: 'confirmed',
-          data: { name: '', level: 'working' },
-        },
-      ],
+      skills: names.map((name) => {
+        const fact = existing.get(name.toLocaleLowerCase());
+        return fact
+          ? { ...fact, data: { ...fact.data, name } }
+          : {
+              id: newFactId(),
+              sourceId: manual.sourceId,
+              confirmationStatus: 'confirmed' as const,
+              evidenceExcerpt: 'Entered directly in Job Radar',
+              data: { name, level: 'working' as const },
+            };
+      }),
     });
   };
 
@@ -176,229 +296,483 @@ export function ProfileEditor({
           id: newFactId(),
           sourceId: manual.sourceId,
           confirmationStatus: 'confirmed',
+          evidenceExcerpt: 'Entered directly in Job Radar',
           data: { name: '', proficiency: 'professional' },
         },
       ],
     });
   };
 
-  const addCertification = () => {
-    const manual = ensureManualSource(draft);
-    onChange({
-      ...manual.draft,
-      certifications: [
-        ...manual.draft.certifications,
-        {
-          id: newFactId(),
-          sourceId: manual.sourceId,
-          confirmationStatus: 'confirmed',
-          data: { name: '', issuer: '' },
-        },
-      ],
-    });
-  };
+  return (
+    <section className="editor-section" aria-labelledby="candidate-profile-heading">
+      <SectionHeading
+        id="candidate-profile-heading"
+        step="02"
+        title="Your fit"
+        description="A short factual summary plus the skills and languages used for matching."
+        state={draft.basics.confirmationStatus}
+      />
+      <div className="form-grid form-grid--two">
+        <label>
+          <span className="field-label">
+            Display name <small>Required</small>
+          </span>
+          <input
+            aria-label="Display name"
+            value={draft.basics.data.displayName}
+            maxLength={100}
+            placeholder="Your name"
+            onChange={(event) =>
+              onChange({
+                ...draft,
+                basics: {
+                  ...draft.basics,
+                  data: { ...draft.basics.data, displayName: event.target.value },
+                },
+              })
+            }
+          />
+        </label>
+        <label>
+          <span className="field-label">Current location</span>
+          <input
+            aria-label="Current location"
+            value={draft.basics.data.currentLocation ?? ''}
+            maxLength={200}
+            placeholder="City, country"
+            onChange={(event) =>
+              onChange({
+                ...draft,
+                basics: {
+                  ...draft.basics,
+                  data: {
+                    ...draft.basics.data,
+                    currentLocation: event.target.value || undefined,
+                  },
+                },
+              })
+            }
+          />
+        </label>
+        <label className="form-grid__wide">
+          <span className="field-label">
+            Professional headline <small>Optional</small>
+          </span>
+          <input
+            aria-label="Professional headline"
+            value={draft.basics.data.headline ?? ''}
+            maxLength={200}
+            placeholder="Backend engineer building reliable data products"
+            onChange={(event) =>
+              onChange({
+                ...draft,
+                basics: {
+                  ...draft.basics,
+                  data: {
+                    ...draft.basics.data,
+                    headline: event.target.value || undefined,
+                  },
+                },
+              })
+            }
+          />
+        </label>
+        <label className="form-grid__wide">
+          <span className="field-label">
+            Professional summary <small>Recommended</small>
+          </span>
+          <span className="field-help">
+            3–5 lines: experience level, strongest work, and the problems you solve.
+          </span>
+          <textarea
+            aria-label="Professional summary"
+            rows={4}
+            value={draft.basics.data.summary ?? ''}
+            maxLength={2_000}
+            placeholder="I build… My strongest evidence is… I am looking for…"
+            onChange={(event) =>
+              onChange({
+                ...draft,
+                basics: {
+                  ...draft.basics,
+                  data: {
+                    ...draft.basics.data,
+                    summary: event.target.value || undefined,
+                  },
+                },
+              })
+            }
+          />
+        </label>
+        <ListField
+          label="Core skills"
+          value={draft.skills.map((fact) => fact.data.name)}
+          placeholder={'Python\nPostgreSQL\nDocker'}
+          help="Only skills you have used. New entries start at working level."
+          priority="Recommended"
+          onChange={updateSkills}
+        />
+        <div className="compact-editor">
+          <div className="compact-editor__heading">
+            <div>
+              <span className="field-label">Languages</span>
+              <span className="field-help">Language gates use these levels.</span>
+            </div>
+            <button className="text-button" type="button" onClick={addLanguage}>
+              + Add language
+            </button>
+          </div>
+          {draft.languages.length === 0 && (
+            <EmptyHint>Add at least one language.</EmptyHint>
+          )}
+          {draft.languages.map((fact, index) => (
+            <div className="inline-row" key={fact.id ?? index}>
+              <input
+                aria-label={`Language ${index + 1}`}
+                value={fact.data.name}
+                placeholder="English"
+                onChange={(event) =>
+                  onChange({
+                    ...draft,
+                    languages: replaceAt(draft.languages, index, (item) => ({
+                      ...item,
+                      data: { ...item.data, name: event.target.value },
+                    })),
+                  })
+                }
+              />
+              <select
+                aria-label={`Language ${index + 1} proficiency`}
+                value={fact.data.proficiency}
+                onChange={(event) =>
+                  onChange({
+                    ...draft,
+                    languages: replaceAt(draft.languages, index, (item) => ({
+                      ...item,
+                      data: {
+                        ...item.data,
+                        proficiency: event.target.value as typeof fact.data.proficiency,
+                      },
+                    })),
+                  })
+                }
+              >
+                <option value="basic">Basic</option>
+                <option value="conversational">Conversational</option>
+                <option value="professional">Professional</option>
+                <option value="fluent">Fluent</option>
+                <option value="native">Native</option>
+              </select>
+              <button
+                className="icon-button icon-button--danger"
+                type="button"
+                aria-label={`Remove language ${index + 1}`}
+                onClick={() =>
+                  onChange({ ...draft, languages: removeAt(draft.languages, index) })
+                }
+              >
+                Remove
+              </button>
+            </div>
+          ))}
+        </div>
+      </div>
 
-  const addProject = () => {
+      {draft.skills.length > 0 && (
+        <details className="profile-disclosure profile-disclosure--nested">
+          <summary>
+            <span>Skill levels</span>
+            <small>Optional years and proficiency</small>
+          </summary>
+          <div className="detail-body compact-list">
+            {draft.skills.map((fact, index) => (
+              <div className="inline-row inline-row--skill" key={fact.id ?? index}>
+                <strong>{fact.data.name}</strong>
+                <select
+                  aria-label={`${fact.data.name} level`}
+                  value={fact.data.level}
+                  onChange={(event) =>
+                    onChange({
+                      ...draft,
+                      skills: replaceAt(draft.skills, index, (item) => ({
+                        ...item,
+                        data: {
+                          ...item.data,
+                          level: event.target.value as typeof fact.data.level,
+                        },
+                      })),
+                    })
+                  }
+                >
+                  <option value="foundational">Foundational</option>
+                  <option value="working">Working</option>
+                  <option value="advanced">Advanced</option>
+                  <option value="expert">Expert</option>
+                </select>
+                <input
+                  aria-label={`${fact.data.name} years`}
+                  type="number"
+                  min={0}
+                  max={80}
+                  placeholder="Years"
+                  value={fact.data.yearsExperience ?? ''}
+                  onChange={(event) =>
+                    onChange({
+                      ...draft,
+                      skills: replaceAt(draft.skills, index, (item) => ({
+                        ...item,
+                        data: {
+                          ...item.data,
+                          yearsExperience: event.target.value
+                            ? Number(event.target.value)
+                            : undefined,
+                        },
+                      })),
+                    })
+                  }
+                />
+              </div>
+            ))}
+          </div>
+        </details>
+      )}
+    </section>
+  );
+}
+
+function EvidenceSection({ draft, onChange }: EditorProps): React.JSX.Element {
+  const addWork = () => {
     const manual = ensureManualSource(draft);
     onChange({
       ...manual.draft,
-      projects: [
-        ...manual.draft.projects,
+      workExperiences: [
+        ...manual.draft.workExperiences,
         {
           id: newFactId(),
           sourceId: manual.sourceId,
           confirmationStatus: 'confirmed',
-          data: { name: '', description: '', technologies: [] },
+          evidenceExcerpt: 'Entered directly in Job Radar',
+          data: {
+            organization: '',
+            title: '',
+            startDate: new Date().toISOString().slice(0, 7),
+            current: true,
+          },
         },
       ],
     });
   };
 
   return (
-    <div className="editor-stack">
-      <section className="editor-section" aria-labelledby="basics-heading">
-        <div className="section-title">
-          <div>
-            <span>01</span>
-            <h2 id="basics-heading">Identity & direction</h2>
+    <section className="editor-section" aria-labelledby="experience-profile-heading">
+      <SectionHeading
+        id="experience-profile-heading"
+        step="03"
+        title="Evidence"
+        description="Concrete outcomes make matching explanations reliable."
+      />
+      {draft.workExperiences.length === 0 && (
+        <EmptyHint>
+          Add one recent role, or add a project under Optional evidence.
+        </EmptyHint>
+      )}
+      {draft.workExperiences.map((fact, index) => (
+        <article className="repeat-card" key={fact.id ?? index}>
+          <div className="repeat-card__heading">
+            <strong>{fact.data.title || `Work experience ${index + 1}`}</strong>
+            <span className={`fact-state fact-state--${fact.confirmationStatus}`}>
+              {fact.confirmationStatus}
+            </span>
           </div>
-          <span className={`fact-state fact-state--${draft.basics.confirmationStatus}`}>
-            {draft.basics.confirmationStatus}
-          </span>
-        </div>
-        <div className="form-grid form-grid--two">
-          <label>
-            Display name
-            <input
-              aria-label="Display name"
-              value={draft.basics.data.displayName}
-              maxLength={100}
-              onChange={(event) =>
-                onChange({
-                  ...draft,
-                  basics: {
-                    ...draft.basics,
-                    data: { ...draft.basics.data, displayName: event.target.value },
+          <div className="form-grid form-grid--two">
+            <label>
+              Organization
+              <input
+                value={fact.data.organization}
+                onChange={(event) =>
+                  onChange({
+                    ...draft,
+                    workExperiences: replaceAt(draft.workExperiences, index, (item) => ({
+                      ...item,
+                      data: { ...item.data, organization: event.target.value },
+                    })),
+                  })
+                }
+              />
+            </label>
+            <label>
+              Role title
+              <input
+                value={fact.data.title}
+                onChange={(event) =>
+                  onChange({
+                    ...draft,
+                    workExperiences: replaceAt(draft.workExperiences, index, (item) => ({
+                      ...item,
+                      data: { ...item.data, title: event.target.value },
+                    })),
+                  })
+                }
+              />
+            </label>
+            <label>
+              Start month
+              <input
+                type="month"
+                value={fact.data.startDate}
+                onChange={(event) =>
+                  onChange({
+                    ...draft,
+                    workExperiences: replaceAt(draft.workExperiences, index, (item) => ({
+                      ...item,
+                      data: { ...item.data, startDate: event.target.value },
+                    })),
+                  })
+                }
+              />
+            </label>
+            <label>
+              End month
+              <input
+                type="month"
+                disabled={fact.data.current}
+                value={fact.data.endDate ?? ''}
+                onChange={(event) =>
+                  onChange({
+                    ...draft,
+                    workExperiences: replaceAt(draft.workExperiences, index, (item) => ({
+                      ...item,
+                      data: { ...item.data, endDate: event.target.value || null },
+                    })),
+                  })
+                }
+              />
+            </label>
+            <label className="checkbox-field form-grid__wide">
+              <input
+                type="checkbox"
+                checked={fact.data.current}
+                onChange={(event) =>
+                  onChange({
+                    ...draft,
+                    workExperiences: replaceAt(draft.workExperiences, index, (item) => ({
+                      ...item,
+                      data: {
+                        ...item.data,
+                        current: event.target.checked,
+                        ...(event.target.checked ? { endDate: null } : {}),
+                      },
+                    })),
+                  })
+                }
+              />
+              Current role
+            </label>
+            <label className="form-grid__wide">
+              Outcomes and responsibilities
+              <span className="field-help">
+                Mention scale, ownership, tools, and outcomes.
+              </span>
+              <textarea
+                rows={4}
+                value={fact.data.summary ?? ''}
+                placeholder="Built… Improved… Led…"
+                onChange={(event) =>
+                  onChange({
+                    ...draft,
+                    workExperiences: replaceAt(draft.workExperiences, index, (item) => ({
+                      ...item,
+                      data: { ...item.data, summary: event.target.value || undefined },
+                    })),
+                  })
+                }
+              />
+            </label>
+          </div>
+          <button
+            className="text-button text-button--danger"
+            type="button"
+            onClick={() =>
+              onChange({
+                ...draft,
+                workExperiences: removeAt(draft.workExperiences, index),
+              })
+            }
+          >
+            Remove experience
+          </button>
+        </article>
+      ))}
+      <button className="button button--add" type="button" onClick={addWork}>
+        + Add work experience
+      </button>
+    </section>
+  );
+}
+
+function OptionalFilters({ draft, onChange }: EditorProps): React.JSX.Element {
+  const preferences = draft.preferences.data;
+
+  return (
+    <details className="profile-disclosure profile-disclosure--section">
+      <summary>
+        <span>Optional search filters</span>
+        <small>Commute, salary, industries, company size and exclusions</small>
+      </summary>
+      <div className="detail-body form-grid form-grid--two">
+        <label>
+          Maximum commute (minutes)
+          <input
+            type="number"
+            min={0}
+            max={300}
+            value={preferences.maxCommuteMinutes ?? ''}
+            onChange={(event) =>
+              onChange({
+                ...draft,
+                preferences: {
+                  ...draft.preferences,
+                  data: {
+                    ...preferences,
+                    maxCommuteMinutes: event.target.value
+                      ? Number(event.target.value)
+                      : null,
                   },
-                })
-              }
-            />
-          </label>
-          <label>
-            Current location
-            <input
-              value={draft.basics.data.currentLocation ?? ''}
-              maxLength={200}
-              placeholder="City, country"
-              onChange={(event) =>
-                onChange({
-                  ...draft,
-                  basics: {
-                    ...draft.basics,
-                    data: {
-                      ...draft.basics.data,
-                      currentLocation: event.target.value || undefined,
-                    },
-                  },
-                })
-              }
-            />
-          </label>
-          <label className="form-grid__wide">
-            Headline
-            <input
-              value={draft.basics.data.headline ?? ''}
-              maxLength={200}
-              placeholder="What you do, in your own words"
-              onChange={(event) =>
-                onChange({
-                  ...draft,
-                  basics: {
-                    ...draft.basics,
-                    data: {
-                      ...draft.basics.data,
-                      headline: event.target.value || undefined,
-                    },
-                  },
-                })
-              }
-            />
-          </label>
-          <label className="form-grid__wide">
-            Professional summary
-            <textarea
-              rows={5}
-              value={draft.basics.data.summary ?? ''}
-              maxLength={2_000}
-              placeholder="A factual summary—nothing will be inferred for you."
-              onChange={(event) =>
-                onChange({
-                  ...draft,
-                  basics: {
-                    ...draft.basics,
-                    data: {
-                      ...draft.basics.data,
-                      summary: event.target.value || undefined,
-                    },
-                  },
-                })
-              }
-            />
-          </label>
-        </div>
-        <FactMeta
-          value={draft.basics}
-          draft={draft}
-          onChange={(value) =>
-            onChange({ ...draft, basics: { ...draft.basics, ...value } })
+                },
+              })
+            }
+          />
+        </label>
+        <ListField
+          label="Preferred industries"
+          value={preferences.preferredIndustries}
+          placeholder="Developer tools"
+          rows={2}
+          onChange={(preferredIndustries) =>
+            onChange({
+              ...draft,
+              preferences: {
+                ...draft.preferences,
+                data: { ...preferences, preferredIndustries },
+              },
+            })
           }
         />
-      </section>
-
-      <section className="editor-section" aria-labelledby="preferences-heading">
-        <div className="section-title">
-          <div>
-            <span>02</span>
-            <h2 id="preferences-heading">Search preferences</h2>
-          </div>
-          <span
-            className={`fact-state fact-state--${draft.preferences.confirmationStatus}`}
-          >
-            {draft.preferences.confirmationStatus}
-          </span>
-        </div>
-        <p className="section-copy">
-          These are future search gates, not a job score. One item per line keeps hard
-          constraints explicit.
-        </p>
-        <div className="form-grid form-grid--two">
-          <ListField
-            label="Target roles"
-            value={draft.preferences.data.targetRoles}
-            placeholder={'Product Engineer\nFrontend Engineer'}
-            onChange={(targetRoles) =>
-              onChange({
-                ...draft,
-                preferences: {
-                  ...draft.preferences,
-                  data: { ...draft.preferences.data, targetRoles },
-                },
-              })
-            }
-          />
-          <ListField
-            label="Target locations"
-            value={draft.preferences.data.targetLocations}
-            placeholder={'Stockholm\nRemote within Sweden'}
-            onChange={(targetLocations) =>
-              onChange({
-                ...draft,
-                preferences: {
-                  ...draft.preferences,
-                  data: { ...draft.preferences.data, targetLocations },
-                },
-              })
-            }
-          />
-          <fieldset className="choice-group form-grid__wide">
-            <legend>Work mode</legend>
-            {(['onsite', 'hybrid', 'remote'] as const).map((mode) => (
-              <label key={mode}>
-                <input
-                  type="checkbox"
-                  checked={draft.preferences.data.workModes.includes(mode)}
-                  onChange={(event) => {
-                    const workModes = event.target.checked
-                      ? [...draft.preferences.data.workModes, mode]
-                      : draft.preferences.data.workModes.filter((item) => item !== mode);
-                    onChange({
-                      ...draft,
-                      preferences: {
-                        ...draft.preferences,
-                        data: { ...draft.preferences.data, workModes },
-                      },
-                    });
-                  }}
-                />
-                {mode}
-              </label>
-            ))}
-          </fieldset>
+        <div className="salary-fields form-grid__wide">
           <label>
-            Maximum commute (minutes)
+            Minimum salary
             <input
               type="number"
-              min={0}
-              max={300}
-              value={draft.preferences.data.maxCommuteMinutes ?? ''}
+              min={1}
+              value={preferences.minimumSalary ?? ''}
               onChange={(event) =>
                 onChange({
                   ...draft,
                   preferences: {
                     ...draft.preferences,
                     data: {
-                      ...draft.preferences.data,
-                      maxCommuteMinutes: event.target.value
+                      ...preferences,
+                      minimumSalary: event.target.value
                         ? Number(event.target.value)
                         : null,
                     },
@@ -408,982 +782,150 @@ export function ProfileEditor({
             />
           </label>
           <label>
-            Work authorization status
-            <select
-              value={draft.preferences.data.workAuthorization.status}
-              onChange={(event) =>
-                onChange({
-                  ...draft,
-                  preferences: {
-                    ...draft.preferences,
-                    data: {
-                      ...draft.preferences.data,
-                      workAuthorization: {
-                        ...draft.preferences.data.workAuthorization,
-                        status: event.target
-                          .value as typeof draft.preferences.data.workAuthorization.status,
-                      },
-                    },
-                  },
-                })
-              }
-            >
-              <option value="unknown">Not specified</option>
-              <option value="citizen">Citizen</option>
-              <option value="permanent_resident">Permanent resident</option>
-              <option value="work_permit">Work permit</option>
-              <option value="needs_sponsorship">Needs sponsorship</option>
-            </select>
-          </label>
-          <ListField
-            label="Authorized countries"
-            value={draft.preferences.data.workAuthorization.countries}
-            placeholder="Sweden"
-            onChange={(countries) =>
-              onChange({
-                ...draft,
-                preferences: {
-                  ...draft.preferences,
-                  data: {
-                    ...draft.preferences.data,
-                    workAuthorization: {
-                      ...draft.preferences.data.workAuthorization,
-                      countries,
-                    },
-                  },
-                },
-              })
-            }
-          />
-          <label className="checkbox-field">
+            Currency
             <input
-              type="checkbox"
-              checked={draft.preferences.data.workAuthorization.needsSponsorship}
+              value={preferences.salaryCurrency ?? ''}
+              maxLength={3}
+              placeholder="SEK"
               onChange={(event) =>
                 onChange({
                   ...draft,
                   preferences: {
                     ...draft.preferences,
                     data: {
-                      ...draft.preferences.data,
-                      workAuthorization: {
-                        ...draft.preferences.data.workAuthorization,
-                        needsSponsorship: event.target.checked,
-                      },
+                      ...preferences,
+                      salaryCurrency: event.target.value
+                        ? event.target.value.toUpperCase()
+                        : null,
                     },
                   },
                 })
               }
             />
-            I require employer sponsorship
           </label>
-          <div className="salary-fields form-grid__wide">
-            <label>
-              Minimum salary
-              <input
-                type="number"
-                min={1}
-                value={draft.preferences.data.minimumSalary ?? ''}
-                onChange={(event) =>
-                  onChange({
-                    ...draft,
-                    preferences: {
-                      ...draft.preferences,
-                      data: {
-                        ...draft.preferences.data,
-                        minimumSalary: event.target.value
-                          ? Number(event.target.value)
-                          : null,
-                      },
+          <label>
+            Period
+            <select
+              value={preferences.salaryPeriod ?? ''}
+              onChange={(event) =>
+                onChange({
+                  ...draft,
+                  preferences: {
+                    ...draft.preferences,
+                    data: {
+                      ...preferences,
+                      salaryPeriod: (event.target.value || null) as
+                        'hour' | 'month' | 'year' | null,
                     },
-                  })
-                }
-              />
-            </label>
-            <label>
-              Currency
-              <input
-                value={draft.preferences.data.salaryCurrency ?? ''}
-                maxLength={3}
-                placeholder="SEK"
-                onChange={(event) =>
-                  onChange({
-                    ...draft,
-                    preferences: {
-                      ...draft.preferences,
-                      data: {
-                        ...draft.preferences.data,
-                        salaryCurrency: event.target.value
-                          ? event.target.value.toUpperCase()
-                          : null,
-                      },
-                    },
-                  })
-                }
-              />
-            </label>
-            <label>
-              Period
-              <select
-                value={draft.preferences.data.salaryPeriod ?? ''}
-                onChange={(event) =>
-                  onChange({
-                    ...draft,
-                    preferences: {
-                      ...draft.preferences,
-                      data: {
-                        ...draft.preferences.data,
-                        salaryPeriod: (event.target.value || null) as
-                          'hour' | 'month' | 'year' | null,
-                      },
-                    },
-                  })
-                }
-              >
-                <option value="">Not set</option>
-                <option value="hour">Hour</option>
-                <option value="month">Month</option>
-                <option value="year">Year</option>
-              </select>
-            </label>
-          </div>
-          <ListField
-            label="Preferred industries"
-            value={draft.preferences.data.preferredIndustries}
-            placeholder="Developer tools"
-            onChange={(preferredIndustries) =>
-              onChange({
-                ...draft,
-                preferences: {
-                  ...draft.preferences,
-                  data: { ...draft.preferences.data, preferredIndustries },
-                },
-              })
-            }
-          />
-          <fieldset className="choice-group">
-            <legend>Preferred company sizes</legend>
-            {(['startup', 'small', 'mid_size', 'large', 'enterprise'] as const).map(
-              (size) => (
-                <label key={size}>
-                  <input
-                    type="checkbox"
-                    checked={draft.preferences.data.preferredCompanySizes.includes(size)}
-                    onChange={(event) => {
-                      const preferredCompanySizes = event.target.checked
-                        ? [...draft.preferences.data.preferredCompanySizes, size]
-                        : draft.preferences.data.preferredCompanySizes.filter(
-                            (item) => item !== size,
-                          );
-                      onChange({
-                        ...draft,
-                        preferences: {
-                          ...draft.preferences,
-                          data: {
-                            ...draft.preferences.data,
-                            preferredCompanySizes,
-                          },
-                        },
-                      });
-                    }}
-                  />
-                  {size.replace('_', ' ')}
-                </label>
-              ),
-            )}
-          </fieldset>
-          <ListField
-            label="Must-have conditions"
-            value={draft.preferences.data.mustHaves}
-            placeholder="Accessible product culture"
-            onChange={(mustHaves) =>
-              onChange({
-                ...draft,
-                preferences: {
-                  ...draft.preferences,
-                  data: { ...draft.preferences.data, mustHaves },
-                },
-              })
-            }
-          />
-          <ListField
-            label="Hard exclusions"
-            value={draft.preferences.data.exclusions}
-            placeholder={'Unpaid roles\nFull-time office attendance'}
-            onChange={(exclusions) =>
-              onChange({
-                ...draft,
-                preferences: {
-                  ...draft.preferences,
-                  data: { ...draft.preferences.data, exclusions },
-                },
-              })
-            }
-          />
+                  },
+                })
+              }
+            >
+              <option value="">Not set</option>
+              <option value="hour">Hour</option>
+              <option value="month">Month</option>
+              <option value="year">Year</option>
+            </select>
+          </label>
         </div>
-        <FactMeta
-          value={draft.preferences}
-          draft={draft}
-          onChange={(value) =>
-            onChange({ ...draft, preferences: { ...draft.preferences, ...value } })
+        <fieldset className="choice-group form-grid__wide">
+          <legend>Preferred company sizes</legend>
+          {(['startup', 'small', 'mid_size', 'large', 'enterprise'] as const).map(
+            (size) => (
+              <label key={size}>
+                <input
+                  type="checkbox"
+                  checked={preferences.preferredCompanySizes.includes(size)}
+                  onChange={(event) => {
+                    const preferredCompanySizes = event.target.checked
+                      ? [...preferences.preferredCompanySizes, size]
+                      : preferences.preferredCompanySizes.filter((item) => item !== size);
+                    onChange({
+                      ...draft,
+                      preferences: {
+                        ...draft.preferences,
+                        data: { ...preferences, preferredCompanySizes },
+                      },
+                    });
+                  }}
+                />
+                {size.replace('_', ' ')}
+              </label>
+            ),
+          )}
+        </fieldset>
+        <ListField
+          label="Must-have conditions"
+          value={preferences.mustHaves}
+          placeholder="Accessible product culture"
+          onChange={(mustHaves) =>
+            onChange({
+              ...draft,
+              preferences: {
+                ...draft.preferences,
+                data: { ...preferences, mustHaves },
+              },
+            })
           }
         />
-      </section>
+        <ListField
+          label="Hard exclusions"
+          value={preferences.exclusions}
+          placeholder={'Unpaid roles\nFull-time office attendance'}
+          onChange={(exclusions) =>
+            onChange({
+              ...draft,
+              preferences: {
+                ...draft.preferences,
+                data: { ...preferences, exclusions },
+              },
+            })
+          }
+        />
+      </div>
+    </details>
+  );
+}
 
-      <section className="editor-section" aria-labelledby="evidence-heading">
-        <div className="section-title">
-          <div>
-            <span>03</span>
-            <h2 id="evidence-heading">Evidence-backed experience</h2>
+function SupportingEvidence({ draft, onChange }: EditorProps): React.JSX.Element {
+  const manualFact = () => ensureManualSource(draft);
+
+  return (
+    <details className="profile-disclosure profile-disclosure--section">
+      <summary>
+        <span>Optional supporting evidence</span>
+        <small>Projects, education and certifications</small>
+      </summary>
+      <div className="detail-body supporting-groups">
+        <section>
+          <div className="supporting-heading">
+            <h3>Projects</h3>
+            <button
+              className="text-button"
+              type="button"
+              onClick={() => {
+                const manual = manualFact();
+                onChange({
+                  ...manual.draft,
+                  projects: [
+                    ...manual.draft.projects,
+                    {
+                      id: newFactId(),
+                      sourceId: manual.sourceId,
+                      confirmationStatus: 'confirmed',
+                      evidenceExcerpt: 'Entered directly in Job Radar',
+                      data: { name: '', description: '', technologies: [] },
+                    },
+                  ],
+                });
+              }}
+            >
+              + Add project
+            </button>
           </div>
-        </div>
-        <p className="section-copy">
-          Add only facts you can stand behind. Each entry retains its source and review
-          status across versions.
-        </p>
-
-        <details open>
-          <summary>
-            Work experience <span>{draft.workExperiences.length}</span>
-          </summary>
-          {draft.workExperiences.length === 0 && (
-            <EmptyHint>No work experience recorded yet.</EmptyHint>
-          )}
-          {draft.workExperiences.map((fact, index) => (
-            <div className="repeat-card" key={fact.id ?? index}>
-              <div className="form-grid form-grid--two">
-                <label>
-                  Organization
-                  <input
-                    value={fact.data.organization}
-                    onChange={(event) =>
-                      onChange({
-                        ...draft,
-                        workExperiences: draft.workExperiences.map((item, itemIndex) =>
-                          itemIndex === index
-                            ? {
-                                ...item,
-                                data: { ...item.data, organization: event.target.value },
-                              }
-                            : item,
-                        ),
-                      })
-                    }
-                  />
-                </label>
-                <label>
-                  Role title
-                  <input
-                    value={fact.data.title}
-                    onChange={(event) =>
-                      onChange({
-                        ...draft,
-                        workExperiences: draft.workExperiences.map((item, itemIndex) =>
-                          itemIndex === index
-                            ? {
-                                ...item,
-                                data: { ...item.data, title: event.target.value },
-                              }
-                            : item,
-                        ),
-                      })
-                    }
-                  />
-                </label>
-                <label className="form-grid__wide">
-                  Work location
-                  <input
-                    value={fact.data.location ?? ''}
-                    placeholder="City, country or remote"
-                    onChange={(event) =>
-                      onChange({
-                        ...draft,
-                        workExperiences: draft.workExperiences.map((item, itemIndex) =>
-                          itemIndex === index
-                            ? {
-                                ...item,
-                                data: {
-                                  ...item.data,
-                                  location: event.target.value || undefined,
-                                },
-                              }
-                            : item,
-                        ),
-                      })
-                    }
-                  />
-                </label>
-                <label>
-                  Start month
-                  <input
-                    type="month"
-                    value={fact.data.startDate}
-                    onChange={(event) =>
-                      onChange({
-                        ...draft,
-                        workExperiences: draft.workExperiences.map((item, itemIndex) =>
-                          itemIndex === index
-                            ? {
-                                ...item,
-                                data: { ...item.data, startDate: event.target.value },
-                              }
-                            : item,
-                        ),
-                      })
-                    }
-                  />
-                </label>
-                <label>
-                  End month
-                  <input
-                    type="month"
-                    disabled={fact.data.current}
-                    value={fact.data.endDate ?? ''}
-                    onChange={(event) =>
-                      onChange({
-                        ...draft,
-                        workExperiences: draft.workExperiences.map((item, itemIndex) =>
-                          itemIndex === index
-                            ? {
-                                ...item,
-                                data: {
-                                  ...item.data,
-                                  endDate: event.target.value || null,
-                                },
-                              }
-                            : item,
-                        ),
-                      })
-                    }
-                  />
-                </label>
-                <label className="checkbox-field">
-                  <input
-                    type="checkbox"
-                    checked={fact.data.current}
-                    onChange={(event) =>
-                      onChange({
-                        ...draft,
-                        workExperiences: draft.workExperiences.map((item, itemIndex) =>
-                          itemIndex === index
-                            ? {
-                                ...item,
-                                data: {
-                                  ...item.data,
-                                  current: event.target.checked,
-                                  ...(event.target.checked ? { endDate: null } : {}),
-                                },
-                              }
-                            : item,
-                        ),
-                      })
-                    }
-                  />
-                  Current role
-                </label>
-                <label className="form-grid__wide">
-                  Summary
-                  <textarea
-                    rows={3}
-                    value={fact.data.summary ?? ''}
-                    onChange={(event) =>
-                      onChange({
-                        ...draft,
-                        workExperiences: draft.workExperiences.map((item, itemIndex) =>
-                          itemIndex === index
-                            ? {
-                                ...item,
-                                data: {
-                                  ...item.data,
-                                  summary: event.target.value || undefined,
-                                },
-                              }
-                            : item,
-                        ),
-                      })
-                    }
-                  />
-                </label>
-              </div>
-              <FactMeta
-                value={fact}
-                draft={draft}
-                onChange={(value) =>
-                  onChange({
-                    ...draft,
-                    workExperiences: draft.workExperiences.map((item, itemIndex) =>
-                      itemIndex === index ? { ...item, ...value } : item,
-                    ),
-                  })
-                }
-              />
-              <button
-                className="text-button text-button--danger"
-                type="button"
-                onClick={() =>
-                  onChange({
-                    ...draft,
-                    workExperiences: draft.workExperiences.filter(
-                      (_item, itemIndex) => itemIndex !== index,
-                    ),
-                  })
-                }
-              >
-                Remove experience
-              </button>
-            </div>
-          ))}
-          <button className="button button--add" type="button" onClick={addWork}>
-            + Add work experience
-          </button>
-        </details>
-
-        <details>
-          <summary>
-            Education <span>{draft.educationExperiences.length}</span>
-          </summary>
-          {draft.educationExperiences.length === 0 && (
-            <EmptyHint>No education recorded yet.</EmptyHint>
-          )}
-          {draft.educationExperiences.map((fact, index) => (
-            <div className="repeat-card" key={fact.id ?? index}>
-              <div className="form-grid form-grid--two">
-                <label>
-                  Institution
-                  <input
-                    value={fact.data.institution}
-                    onChange={(event) =>
-                      onChange({
-                        ...draft,
-                        educationExperiences: draft.educationExperiences.map(
-                          (item, itemIndex) =>
-                            itemIndex === index
-                              ? {
-                                  ...item,
-                                  data: { ...item.data, institution: event.target.value },
-                                }
-                              : item,
-                        ),
-                      })
-                    }
-                  />
-                </label>
-                <label>
-                  Degree or credential
-                  <input
-                    value={fact.data.degree}
-                    onChange={(event) =>
-                      onChange({
-                        ...draft,
-                        educationExperiences: draft.educationExperiences.map(
-                          (item, itemIndex) =>
-                            itemIndex === index
-                              ? {
-                                  ...item,
-                                  data: { ...item.data, degree: event.target.value },
-                                }
-                              : item,
-                        ),
-                      })
-                    }
-                  />
-                </label>
-                <label>
-                  Field of study
-                  <input
-                    value={fact.data.fieldOfStudy ?? ''}
-                    onChange={(event) =>
-                      onChange({
-                        ...draft,
-                        educationExperiences: draft.educationExperiences.map(
-                          (item, itemIndex) =>
-                            itemIndex === index
-                              ? {
-                                  ...item,
-                                  data: {
-                                    ...item.data,
-                                    fieldOfStudy: event.target.value || undefined,
-                                  },
-                                }
-                              : item,
-                        ),
-                      })
-                    }
-                  />
-                </label>
-                <label>
-                  Start month
-                  <input
-                    type="month"
-                    value={fact.data.startDate ?? ''}
-                    onChange={(event) =>
-                      onChange({
-                        ...draft,
-                        educationExperiences: draft.educationExperiences.map(
-                          (item, itemIndex) =>
-                            itemIndex === index
-                              ? {
-                                  ...item,
-                                  data: {
-                                    ...item.data,
-                                    startDate: event.target.value || undefined,
-                                  },
-                                }
-                              : item,
-                        ),
-                      })
-                    }
-                  />
-                </label>
-                <label>
-                  End month
-                  <input
-                    type="month"
-                    value={fact.data.endDate ?? ''}
-                    onChange={(event) =>
-                      onChange({
-                        ...draft,
-                        educationExperiences: draft.educationExperiences.map(
-                          (item, itemIndex) =>
-                            itemIndex === index
-                              ? {
-                                  ...item,
-                                  data: {
-                                    ...item.data,
-                                    endDate: event.target.value || undefined,
-                                  },
-                                }
-                              : item,
-                        ),
-                      })
-                    }
-                  />
-                </label>
-                <label className="form-grid__wide">
-                  Education note
-                  <textarea
-                    rows={3}
-                    value={fact.data.summary ?? ''}
-                    onChange={(event) =>
-                      onChange({
-                        ...draft,
-                        educationExperiences: draft.educationExperiences.map(
-                          (item, itemIndex) =>
-                            itemIndex === index
-                              ? {
-                                  ...item,
-                                  data: {
-                                    ...item.data,
-                                    summary: event.target.value || undefined,
-                                  },
-                                }
-                              : item,
-                        ),
-                      })
-                    }
-                  />
-                </label>
-              </div>
-              <FactMeta
-                value={fact}
-                draft={draft}
-                onChange={(value) =>
-                  onChange({
-                    ...draft,
-                    educationExperiences: draft.educationExperiences.map(
-                      (item, itemIndex) =>
-                        itemIndex === index ? { ...item, ...value } : item,
-                    ),
-                  })
-                }
-              />
-              <button
-                className="text-button text-button--danger"
-                type="button"
-                onClick={() =>
-                  onChange({
-                    ...draft,
-                    educationExperiences: draft.educationExperiences.filter(
-                      (_item, itemIndex) => itemIndex !== index,
-                    ),
-                  })
-                }
-              >
-                Remove education
-              </button>
-            </div>
-          ))}
-          <button className="button button--add" type="button" onClick={addEducation}>
-            + Add education
-          </button>
-        </details>
-
-        <details>
-          <summary>
-            Skills <span>{draft.skills.length}</span>
-          </summary>
-          {draft.skills.length === 0 && <EmptyHint>No skills recorded yet.</EmptyHint>}
-          {draft.skills.map((fact, index) => (
-            <div className="repeat-card repeat-card--compact" key={fact.id ?? index}>
-              <div className="form-grid form-grid--three">
-                <label>
-                  Skill
-                  <input
-                    value={fact.data.name}
-                    onChange={(event) =>
-                      onChange({
-                        ...draft,
-                        skills: draft.skills.map((item, itemIndex) =>
-                          itemIndex === index
-                            ? {
-                                ...item,
-                                data: { ...item.data, name: event.target.value },
-                              }
-                            : item,
-                        ),
-                      })
-                    }
-                  />
-                </label>
-                <label>
-                  Level
-                  <select
-                    value={fact.data.level}
-                    onChange={(event) =>
-                      onChange({
-                        ...draft,
-                        skills: draft.skills.map((item, itemIndex) =>
-                          itemIndex === index
-                            ? {
-                                ...item,
-                                data: {
-                                  ...item.data,
-                                  level: event.target.value as typeof fact.data.level,
-                                },
-                              }
-                            : item,
-                        ),
-                      })
-                    }
-                  >
-                    <option value="foundational">Foundational</option>
-                    <option value="working">Working</option>
-                    <option value="advanced">Advanced</option>
-                    <option value="expert">Expert</option>
-                  </select>
-                </label>
-                <label>
-                  Years
-                  <input
-                    type="number"
-                    min={0}
-                    max={80}
-                    value={fact.data.yearsExperience ?? ''}
-                    onChange={(event) =>
-                      onChange({
-                        ...draft,
-                        skills: draft.skills.map((item, itemIndex) =>
-                          itemIndex === index
-                            ? {
-                                ...item,
-                                data: {
-                                  ...item.data,
-                                  yearsExperience: event.target.value
-                                    ? Number(event.target.value)
-                                    : undefined,
-                                },
-                              }
-                            : item,
-                        ),
-                      })
-                    }
-                  />
-                </label>
-              </div>
-              <FactMeta
-                value={fact}
-                draft={draft}
-                onChange={(value) =>
-                  onChange({
-                    ...draft,
-                    skills: draft.skills.map((item, itemIndex) =>
-                      itemIndex === index ? { ...item, ...value } : item,
-                    ),
-                  })
-                }
-              />
-              <button
-                className="text-button text-button--danger"
-                type="button"
-                onClick={() =>
-                  onChange({
-                    ...draft,
-                    skills: draft.skills.filter(
-                      (_item, itemIndex) => itemIndex !== index,
-                    ),
-                  })
-                }
-              >
-                Remove skill
-              </button>
-            </div>
-          ))}
-          <button className="button button--add" type="button" onClick={addSkill}>
-            + Add skill
-          </button>
-        </details>
-
-        <details>
-          <summary>
-            Languages <span>{draft.languages.length}</span>
-          </summary>
-          {draft.languages.length === 0 && (
-            <EmptyHint>No languages recorded yet.</EmptyHint>
-          )}
-          {draft.languages.map((fact, index) => (
-            <div className="repeat-card repeat-card--compact" key={fact.id ?? index}>
-              <div className="form-grid form-grid--two">
-                <label>
-                  Language
-                  <input
-                    value={fact.data.name}
-                    onChange={(event) =>
-                      onChange({
-                        ...draft,
-                        languages: draft.languages.map((item, itemIndex) =>
-                          itemIndex === index
-                            ? {
-                                ...item,
-                                data: { ...item.data, name: event.target.value },
-                              }
-                            : item,
-                        ),
-                      })
-                    }
-                  />
-                </label>
-                <label>
-                  Proficiency
-                  <select
-                    value={fact.data.proficiency}
-                    onChange={(event) =>
-                      onChange({
-                        ...draft,
-                        languages: draft.languages.map((item, itemIndex) =>
-                          itemIndex === index
-                            ? {
-                                ...item,
-                                data: {
-                                  ...item.data,
-                                  proficiency: event.target
-                                    .value as typeof fact.data.proficiency,
-                                },
-                              }
-                            : item,
-                        ),
-                      })
-                    }
-                  >
-                    <option value="basic">Basic</option>
-                    <option value="conversational">Conversational</option>
-                    <option value="professional">Professional</option>
-                    <option value="fluent">Fluent</option>
-                    <option value="native">Native</option>
-                  </select>
-                </label>
-              </div>
-              <FactMeta
-                value={fact}
-                draft={draft}
-                onChange={(value) =>
-                  onChange({
-                    ...draft,
-                    languages: draft.languages.map((item, itemIndex) =>
-                      itemIndex === index ? { ...item, ...value } : item,
-                    ),
-                  })
-                }
-              />
-              <button
-                className="text-button text-button--danger"
-                type="button"
-                onClick={() =>
-                  onChange({
-                    ...draft,
-                    languages: draft.languages.filter(
-                      (_item, itemIndex) => itemIndex !== index,
-                    ),
-                  })
-                }
-              >
-                Remove language
-              </button>
-            </div>
-          ))}
-          <button className="button button--add" type="button" onClick={addLanguage}>
-            + Add language
-          </button>
-        </details>
-
-        <details>
-          <summary>
-            Certifications <span>{draft.certifications.length}</span>
-          </summary>
-          {draft.certifications.length === 0 && (
-            <EmptyHint>No certifications recorded yet.</EmptyHint>
-          )}
-          {draft.certifications.map((fact, index) => (
-            <div className="repeat-card repeat-card--compact" key={fact.id ?? index}>
-              <div className="form-grid form-grid--two">
-                <label>
-                  Certification
-                  <input
-                    value={fact.data.name}
-                    onChange={(event) =>
-                      onChange({
-                        ...draft,
-                        certifications: draft.certifications.map((item, itemIndex) =>
-                          itemIndex === index
-                            ? {
-                                ...item,
-                                data: { ...item.data, name: event.target.value },
-                              }
-                            : item,
-                        ),
-                      })
-                    }
-                  />
-                </label>
-                <label>
-                  Issuer
-                  <input
-                    value={fact.data.issuer}
-                    onChange={(event) =>
-                      onChange({
-                        ...draft,
-                        certifications: draft.certifications.map((item, itemIndex) =>
-                          itemIndex === index
-                            ? {
-                                ...item,
-                                data: { ...item.data, issuer: event.target.value },
-                              }
-                            : item,
-                        ),
-                      })
-                    }
-                  />
-                </label>
-                <label>
-                  Issue month
-                  <input
-                    type="month"
-                    value={fact.data.issueDate ?? ''}
-                    onChange={(event) =>
-                      onChange({
-                        ...draft,
-                        certifications: draft.certifications.map((item, itemIndex) =>
-                          itemIndex === index
-                            ? {
-                                ...item,
-                                data: {
-                                  ...item.data,
-                                  issueDate: event.target.value || undefined,
-                                },
-                              }
-                            : item,
-                        ),
-                      })
-                    }
-                  />
-                </label>
-                <label>
-                  Expiry month
-                  <input
-                    type="month"
-                    value={fact.data.expiresAt ?? ''}
-                    onChange={(event) =>
-                      onChange({
-                        ...draft,
-                        certifications: draft.certifications.map((item, itemIndex) =>
-                          itemIndex === index
-                            ? {
-                                ...item,
-                                data: {
-                                  ...item.data,
-                                  expiresAt: event.target.value || undefined,
-                                },
-                              }
-                            : item,
-                        ),
-                      })
-                    }
-                  />
-                </label>
-                <label className="form-grid__wide">
-                  Credential ID
-                  <input
-                    value={fact.data.credentialId ?? ''}
-                    onChange={(event) =>
-                      onChange({
-                        ...draft,
-                        certifications: draft.certifications.map((item, itemIndex) =>
-                          itemIndex === index
-                            ? {
-                                ...item,
-                                data: {
-                                  ...item.data,
-                                  credentialId: event.target.value || undefined,
-                                },
-                              }
-                            : item,
-                        ),
-                      })
-                    }
-                  />
-                </label>
-              </div>
-              <FactMeta
-                value={fact}
-                draft={draft}
-                onChange={(value) =>
-                  onChange({
-                    ...draft,
-                    certifications: draft.certifications.map((item, itemIndex) =>
-                      itemIndex === index ? { ...item, ...value } : item,
-                    ),
-                  })
-                }
-              />
-              <button
-                className="text-button text-button--danger"
-                type="button"
-                onClick={() =>
-                  onChange({
-                    ...draft,
-                    certifications: draft.certifications.filter(
-                      (_item, itemIndex) => itemIndex !== index,
-                    ),
-                  })
-                }
-              >
-                Remove certification
-              </button>
-            </div>
-          ))}
-          <button className="button button--add" type="button" onClick={addCertification}>
-            + Add certification
-          </button>
-        </details>
-
-        <details>
-          <summary>
-            Projects <span>{draft.projects.length}</span>
-          </summary>
-          {draft.projects.length === 0 && (
-            <EmptyHint>No projects recorded yet.</EmptyHint>
-          )}
+          {draft.projects.length === 0 && <EmptyHint>No projects added.</EmptyHint>}
           {draft.projects.map((fact, index) => (
-            <div className="repeat-card" key={fact.id ?? index}>
+            <article className="repeat-card" key={fact.id ?? index}>
               <div className="form-grid form-grid--two">
                 <label>
                   Project name
@@ -1392,14 +934,10 @@ export function ProfileEditor({
                     onChange={(event) =>
                       onChange({
                         ...draft,
-                        projects: draft.projects.map((item, itemIndex) =>
-                          itemIndex === index
-                            ? {
-                                ...item,
-                                data: { ...item.data, name: event.target.value },
-                              }
-                            : item,
-                        ),
+                        projects: replaceAt(draft.projects, index, (item) => ({
+                          ...item,
+                          data: { ...item.data, name: event.target.value },
+                        })),
                       })
                     }
                   />
@@ -1411,63 +949,10 @@ export function ProfileEditor({
                     onChange={(event) =>
                       onChange({
                         ...draft,
-                        projects: draft.projects.map((item, itemIndex) =>
-                          itemIndex === index
-                            ? {
-                                ...item,
-                                data: {
-                                  ...item.data,
-                                  role: event.target.value || undefined,
-                                },
-                              }
-                            : item,
-                        ),
-                      })
-                    }
-                  />
-                </label>
-                <label>
-                  Start month
-                  <input
-                    type="month"
-                    value={fact.data.startDate ?? ''}
-                    onChange={(event) =>
-                      onChange({
-                        ...draft,
-                        projects: draft.projects.map((item, itemIndex) =>
-                          itemIndex === index
-                            ? {
-                                ...item,
-                                data: {
-                                  ...item.data,
-                                  startDate: event.target.value || undefined,
-                                },
-                              }
-                            : item,
-                        ),
-                      })
-                    }
-                  />
-                </label>
-                <label>
-                  End month
-                  <input
-                    type="month"
-                    value={fact.data.endDate ?? ''}
-                    onChange={(event) =>
-                      onChange({
-                        ...draft,
-                        projects: draft.projects.map((item, itemIndex) =>
-                          itemIndex === index
-                            ? {
-                                ...item,
-                                data: {
-                                  ...item.data,
-                                  endDate: event.target.value || undefined,
-                                },
-                              }
-                            : item,
-                        ),
+                        projects: replaceAt(draft.projects, index, (item) => ({
+                          ...item,
+                          data: { ...item.data, role: event.target.value || undefined },
+                        })),
                       })
                     }
                   />
@@ -1480,14 +965,10 @@ export function ProfileEditor({
                     onChange={(event) =>
                       onChange({
                         ...draft,
-                        projects: draft.projects.map((item, itemIndex) =>
-                          itemIndex === index
-                            ? {
-                                ...item,
-                                data: { ...item.data, description: event.target.value },
-                              }
-                            : item,
-                        ),
+                        projects: replaceAt(draft.projects, index, (item) => ({
+                          ...item,
+                          data: { ...item.data, description: event.target.value },
+                        })),
                       })
                     }
                   />
@@ -1496,51 +977,239 @@ export function ProfileEditor({
                   label="Technologies"
                   value={fact.data.technologies}
                   placeholder={'React\nSQLite'}
+                  rows={2}
                   onChange={(technologies) =>
                     onChange({
                       ...draft,
-                      projects: draft.projects.map((item, itemIndex) =>
-                        itemIndex === index
-                          ? { ...item, data: { ...item.data, technologies } }
-                          : item,
-                      ),
+                      projects: replaceAt(draft.projects, index, (item) => ({
+                        ...item,
+                        data: { ...item.data, technologies },
+                      })),
                     })
                   }
                 />
               </div>
-              <FactMeta
-                value={fact}
-                draft={draft}
-                onChange={(value) =>
-                  onChange({
-                    ...draft,
-                    projects: draft.projects.map((item, itemIndex) =>
-                      itemIndex === index ? { ...item, ...value } : item,
-                    ),
-                  })
+              <button
+                className="text-button text-button--danger"
+                type="button"
+                onClick={() =>
+                  onChange({ ...draft, projects: removeAt(draft.projects, index) })
                 }
-              />
+              >
+                Remove project
+              </button>
+            </article>
+          ))}
+        </section>
+
+        <section>
+          <div className="supporting-heading">
+            <h3>Education</h3>
+            <button
+              className="text-button"
+              type="button"
+              onClick={() => {
+                const manual = manualFact();
+                onChange({
+                  ...manual.draft,
+                  educationExperiences: [
+                    ...manual.draft.educationExperiences,
+                    {
+                      id: newFactId(),
+                      sourceId: manual.sourceId,
+                      confirmationStatus: 'confirmed',
+                      evidenceExcerpt: 'Entered directly in Job Radar',
+                      data: { institution: '', degree: '' },
+                    },
+                  ],
+                });
+              }}
+            >
+              + Add education
+            </button>
+          </div>
+          {draft.educationExperiences.length === 0 && (
+            <EmptyHint>No education added.</EmptyHint>
+          )}
+          {draft.educationExperiences.map((fact, index) => (
+            <article className="repeat-card" key={fact.id ?? index}>
+              <div className="form-grid form-grid--two">
+                <label>
+                  Institution
+                  <input
+                    value={fact.data.institution}
+                    onChange={(event) =>
+                      onChange({
+                        ...draft,
+                        educationExperiences: replaceAt(
+                          draft.educationExperiences,
+                          index,
+                          (item) => ({
+                            ...item,
+                            data: { ...item.data, institution: event.target.value },
+                          }),
+                        ),
+                      })
+                    }
+                  />
+                </label>
+                <label>
+                  Degree or credential
+                  <input
+                    value={fact.data.degree}
+                    onChange={(event) =>
+                      onChange({
+                        ...draft,
+                        educationExperiences: replaceAt(
+                          draft.educationExperiences,
+                          index,
+                          (item) => ({
+                            ...item,
+                            data: { ...item.data, degree: event.target.value },
+                          }),
+                        ),
+                      })
+                    }
+                  />
+                </label>
+                <label className="form-grid__wide">
+                  Field of study
+                  <input
+                    value={fact.data.fieldOfStudy ?? ''}
+                    onChange={(event) =>
+                      onChange({
+                        ...draft,
+                        educationExperiences: replaceAt(
+                          draft.educationExperiences,
+                          index,
+                          (item) => ({
+                            ...item,
+                            data: {
+                              ...item.data,
+                              fieldOfStudy: event.target.value || undefined,
+                            },
+                          }),
+                        ),
+                      })
+                    }
+                  />
+                </label>
+              </div>
               <button
                 className="text-button text-button--danger"
                 type="button"
                 onClick={() =>
                   onChange({
                     ...draft,
-                    projects: draft.projects.filter(
-                      (_item, itemIndex) => itemIndex !== index,
-                    ),
+                    educationExperiences: removeAt(draft.educationExperiences, index),
                   })
                 }
               >
-                Remove project
+                Remove education
               </button>
-            </div>
+            </article>
           ))}
-          <button className="button button--add" type="button" onClick={addProject}>
-            + Add project
-          </button>
-        </details>
-      </section>
+        </section>
+
+        <section>
+          <div className="supporting-heading">
+            <h3>Certifications</h3>
+            <button
+              className="text-button"
+              type="button"
+              onClick={() => {
+                const manual = manualFact();
+                onChange({
+                  ...manual.draft,
+                  certifications: [
+                    ...manual.draft.certifications,
+                    {
+                      id: newFactId(),
+                      sourceId: manual.sourceId,
+                      confirmationStatus: 'confirmed',
+                      evidenceExcerpt: 'Entered directly in Job Radar',
+                      data: { name: '', issuer: '' },
+                    },
+                  ],
+                });
+              }}
+            >
+              + Add certification
+            </button>
+          </div>
+          {draft.certifications.length === 0 && (
+            <EmptyHint>No certifications added.</EmptyHint>
+          )}
+          {draft.certifications.map((fact, index) => (
+            <article className="repeat-card" key={fact.id ?? index}>
+              <div className="form-grid form-grid--two">
+                <label>
+                  Certification
+                  <input
+                    value={fact.data.name}
+                    onChange={(event) =>
+                      onChange({
+                        ...draft,
+                        certifications: replaceAt(
+                          draft.certifications,
+                          index,
+                          (item) => ({
+                            ...item,
+                            data: { ...item.data, name: event.target.value },
+                          }),
+                        ),
+                      })
+                    }
+                  />
+                </label>
+                <label>
+                  Issuer
+                  <input
+                    value={fact.data.issuer}
+                    onChange={(event) =>
+                      onChange({
+                        ...draft,
+                        certifications: replaceAt(
+                          draft.certifications,
+                          index,
+                          (item) => ({
+                            ...item,
+                            data: { ...item.data, issuer: event.target.value },
+                          }),
+                        ),
+                      })
+                    }
+                  />
+                </label>
+              </div>
+              <button
+                className="text-button text-button--danger"
+                type="button"
+                onClick={() =>
+                  onChange({
+                    ...draft,
+                    certifications: removeAt(draft.certifications, index),
+                  })
+                }
+              >
+                Remove certification
+              </button>
+            </article>
+          ))}
+        </section>
+      </div>
+    </details>
+  );
+}
+
+export function ProfileEditor({ draft, onChange }: EditorProps): React.JSX.Element {
+  return (
+    <div className="editor-stack">
+      <SearchSection draft={draft} onChange={onChange} />
+      <FitSection draft={draft} onChange={onChange} />
+      <EvidenceSection draft={draft} onChange={onChange} />
+      <OptionalFilters draft={draft} onChange={onChange} />
+      <SupportingEvidence draft={draft} onChange={onChange} />
     </div>
   );
 }
