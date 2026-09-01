@@ -4,6 +4,9 @@ import { join } from 'node:path';
 
 import { afterEach, describe, expect, it } from 'vitest';
 
+import { createProfileRequestSchema, normalizedJobSchema } from '@job-radar/shared';
+import { createFictionalProfileInput } from '@job-radar/testing';
+
 import type { DatabaseClient } from './database.js';
 import {
   checkDatabase,
@@ -11,6 +14,8 @@ import {
   openDatabase,
   runMigrations,
 } from './database.js';
+import { JobRepository } from './job-repository.js';
+import { ProfileRepository } from './profile-repository.js';
 
 let database: DatabaseClient | undefined;
 
@@ -21,6 +26,7 @@ const migrationFiles = [
   '0003_superb_sprite.sql',
   '0004_windy_mongu.sql',
   '0005_sweden_source_cleanup.sql',
+  '0006_neat_clea.sql',
 ] as const;
 
 function copyMigrationsThrough(target: string, lastIndex: number): void {
@@ -74,6 +80,10 @@ describe('database infrastructure', () => {
       'jobs',
       'job_sources',
       'job_snapshots',
+      'scoring_tasks',
+      'job_requirements',
+      'job_scores',
+      'scoring_attempts',
     ];
     const tables = database.sqlite
       .prepare(
@@ -187,6 +197,66 @@ describe('database infrastructure', () => {
       maxPages: 20,
     });
     expect(source.version).toBe(2);
+    expect(database.sqlite.pragma('integrity_check', { simple: true })).toBe('ok');
+    expect(database.sqlite.pragma('foreign_key_check')).toEqual([]);
+  });
+
+  it('adds M3 scoring tables to a populated M2 database without changing job history', () => {
+    const directory = mkdtempSync(join(tmpdir(), 'job-radar-m2-upgrade-'));
+    const m2Migrations = join(directory, 'm2-migrations');
+    copyMigrationsThrough(m2Migrations, 5);
+    database = openDatabase(join(directory, 'm2-upgrade.sqlite'));
+    runMigrations(database, m2Migrations);
+
+    const profiles = new ProfileRepository(database);
+    const profile = profiles.create(
+      createProfileRequestSchema.parse(createFictionalProfileInput()),
+    );
+    const jobs = new JobRepository(database);
+    const source = jobs.ensureDefaultSources();
+    const scan = jobs.createScan(profile.version, [source], ['Product Engineer']);
+    const ingested = jobs.ingestJob(
+      source,
+      scan.id,
+      normalizedJobSchema.parse({
+        externalId: 'fictional-m2-migration-job',
+        title: 'Fictional Migration Engineer',
+        company: 'Fictional Upgrade Works AB',
+        location: 'Stockholm, Sweden',
+        publishedAt: '2026-08-30T08:00:00.000Z',
+        deadline: null,
+        descriptionText: 'A fully fictional M2 snapshot retained during migration.',
+        descriptionHtml: null,
+        sourceUrl: 'https://jobs.example.test/fictional-m2-migration-job',
+        canonicalUrl: 'https://jobs.example.test/fictional-m2-migration-job',
+        remoteMode: 'hybrid',
+        employmentType: 'Full-time',
+        sourceActive: true,
+        sourceMetadata: { fixture: true },
+        rawData: { fixture: 'm2-migration' },
+      }),
+      new Date('2026-09-01T08:00:00.000Z'),
+    );
+
+    runMigrations(database, getMigrationsFolder());
+
+    expect(
+      database.sqlite
+        .prepare(
+          'select j.current_snapshot_id as snapshot_id, s.description_text as description from jobs j join job_snapshots s on s.id = j.current_snapshot_id where j.id = ?',
+        )
+        .get(ingested.jobId),
+    ).toEqual({
+      snapshot_id: ingested.snapshotId,
+      description: 'A fully fictional M2 snapshot retained during migration.',
+    });
+    expect(
+      database.sqlite
+        .prepare(
+          'select (select count(*) from scoring_tasks) as tasks, (select count(*) from job_requirements) as requirements, (select count(*) from job_scores) as scores, (select count(*) from scoring_attempts) as attempts',
+        )
+        .get(),
+    ).toEqual({ tasks: 0, requirements: 0, scores: 0, attempts: 0 });
     expect(database.sqlite.pragma('integrity_check', { simple: true })).toBe('ok');
     expect(database.sqlite.pragma('foreign_key_check')).toEqual([]);
   });

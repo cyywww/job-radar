@@ -36,8 +36,11 @@ import {
   jobSnapshots,
   jobMergeEvents,
   jobSources,
+  jobRequirements,
+  jobScores,
   jobs,
   scanRuns,
+  scoringTasks,
   sourceRuns,
   sources,
 } from './schema.js';
@@ -146,6 +149,8 @@ function countsFromRow(
 export interface IngestResult {
   readonly outcome: 'created' | 'updated' | 'unchanged';
   readonly closed: boolean;
+  readonly jobId: string;
+  readonly snapshotId: string;
 }
 
 export interface CompleteSourceRunInput {
@@ -840,6 +845,8 @@ export class JobRepository {
             ? 'unchanged'
             : 'updated',
         closed: Boolean(existingJob?.active && !active),
+        jobId,
+        snapshotId,
       };
     });
   }
@@ -1140,6 +1147,21 @@ export class JobRepository {
               closedAt: keeper.active || duplicate.active ? null : keeper.closedAt,
             })
             .where(eq(jobs.id, keeper.id))
+            .run();
+          transaction
+            .update(scoringTasks)
+            .set({ jobId: keeper.id, invalidatedAt: now, updatedAt: now })
+            .where(eq(scoringTasks.jobId, duplicate.id))
+            .run();
+          transaction
+            .update(jobRequirements)
+            .set({ jobId: keeper.id, invalidatedAt: now })
+            .where(eq(jobRequirements.jobId, duplicate.id))
+            .run();
+          transaction
+            .update(jobScores)
+            .set({ jobId: keeper.id, invalidatedAt: now, updatedAt: now })
+            .where(eq(jobScores.jobId, duplicate.id))
             .run();
           transaction.delete(jobs).where(eq(jobs.id, duplicate.id)).run();
           merged += 1;

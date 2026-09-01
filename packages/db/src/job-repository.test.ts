@@ -454,6 +454,63 @@ describe('JobRepository multi-source identity', () => {
         jobtech.id,
       );
 
+    for (const [index, job] of before.jobs.entries()) {
+      const snapshotId = repository.getJob(job.id)!.snapshot.id;
+      const taskId = `93000000-0000-4000-8000-${String(index + 1).padStart(12, '0')}`;
+      const requirementId = `94000000-0000-4000-8000-${String(index + 1).padStart(12, '0')}`;
+      const scoreId = `95000000-0000-4000-8000-${String(index + 1).padStart(12, '0')}`;
+      const attemptId = `96000000-0000-4000-8000-${String(index + 1).padStart(12, '0')}`;
+      database.sqlite
+        .prepare(
+          `insert into scoring_tasks
+            (id, job_id, snapshot_id, profile_version, extractor_version, scoring_version,
+             status, attempt_count, max_attempts, created_at, updated_at)
+           values (?, ?, ?, 1, 'fictional-extractor-v1', 'fictional-scoring-v1',
+             'succeeded', 1, 3, ?, ?)`,
+        )
+        .run(taskId, job.id, snapshotId, now.getTime(), now.getTime());
+      database.sqlite
+        .prepare(
+          `insert into job_requirements
+            (id, task_id, job_id, snapshot_id, profile_version, extractor_version,
+             extraction_json, confidence_micros, provider, model, created_at)
+           values (?, ?, ?, ?, 1, 'fictional-extractor-v1', '{}', 900000,
+             'codex_cli', 'fictional-model', ?)`,
+        )
+        .run(requirementId, taskId, job.id, snapshotId, now.getTime());
+      database.sqlite
+        .prepare(
+          `insert into job_scores
+            (id, task_id, requirement_id, job_id, snapshot_id, profile_version,
+             scoring_version, eligible, job_active, gate_reasons_json, match_score,
+             ranking_score, ranking_factors_json, breakdown_json, matched_evidence_json,
+             gaps_json, unknowns_json, confidence_micros, provider, model, review_state,
+             explanation, ranking_as_of, created_at, updated_at)
+           values (?, ?, ?, ?, ?, 1, 'fictional-scoring-v1', 0, 1,
+             '[{"code":"company_excluded","outcome":"fail","explanation":"Fictional exclusion."}]',
+             null, null, null, null, '[]', '[]', '[]', 900000, 'codex_cli',
+             'fictional-model', 'not_required', 'Fictional historical Gate failure.',
+             null, ?, ?)`,
+        )
+        .run(
+          scoreId,
+          taskId,
+          requirementId,
+          job.id,
+          snapshotId,
+          now.getTime(),
+          now.getTime(),
+        );
+      database.sqlite
+        .prepare(
+          `insert into scoring_attempts
+            (id, task_id, attempt_number, outcome, provider, model, output_bytes,
+             started_at, finished_at)
+           values (?, ?, 1, 'succeeded', 'codex_cli', 'fictional-model', 0, ?, ?)`,
+        )
+        .run(attemptId, taskId, now.getTime(), now.getTime());
+    }
+
     const result = repository.reprocessJobs(new Date('2026-09-01T12:00:00.000Z'));
     expect(result).toMatchObject({ processed: 2, merged: 1, snapshotsPreserved: 2 });
     expect(result.canonicalUrlsUpdated).toBeGreaterThan(0);
@@ -471,6 +528,18 @@ describe('JobRepository multi-source identity', () => {
     expect(detail.sources.every((source) => source.sourceUrl.includes('utm_'))).toBe(
       false,
     );
+    expect(
+      database.sqlite
+        .prepare(
+          `select
+             (select count(*) from scoring_tasks where job_id = ?) as tasks,
+             (select count(*) from job_requirements where job_id = ?) as requirements,
+             (select count(*) from job_scores where job_id = ?) as scores,
+             (select count(*) from scoring_attempts) as attempts`,
+        )
+        .get(detail.id, detail.id, detail.id),
+    ).toEqual({ tasks: 2, requirements: 2, scores: 2, attempts: 2 });
+    expect(database.sqlite.pragma('foreign_key_check')).toEqual([]);
     expect(repository.reprocessJobs(new Date('2026-09-02T12:00:00.000Z')).merged).toBe(0);
   });
 

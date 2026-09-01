@@ -360,8 +360,8 @@ export class ProfileRepository {
     });
   }
 
-  getConfirmedView(): ConfirmedProfileView | null {
-    const current = this.getCurrent();
+  getConfirmedView(version?: number): ConfirmedProfileView | null {
+    const current = version === undefined ? this.getCurrent() : this.getVersion(version);
     if (!current) return null;
 
     return {

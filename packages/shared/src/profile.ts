@@ -151,6 +151,7 @@ export const projectExperienceDataSchema = z
 export const workAuthorizationSchema = z
   .object({
     countries: z.array(z.string().trim().min(1).max(100)).max(30).default([]),
+    securityClearances: z.array(z.string().trim().min(1).max(120)).max(30).optional(),
     status: z.enum([
       'citizen',
       'permanent_resident',
@@ -181,6 +182,9 @@ export const jobPreferencesDataSchema = z
     salaryPeriod: z.enum(['hour', 'month', 'year']).nullable().default(null),
     workAuthorization: workAuthorizationSchema,
     preferredIndustries: z.array(z.string().trim().min(1).max(120)).max(30).default([]),
+    targetCompanies: z.array(z.string().trim().min(1).max(160)).max(100).optional(),
+    excludedCompanies: z.array(z.string().trim().min(1).max(160)).max(100).optional(),
+    excludedRoleTypes: z.array(z.string().trim().min(1).max(160)).max(100).optional(),
     preferredCompanySizes: z
       .array(z.enum(['startup', 'small', 'mid_size', 'large', 'enterprise']))
       .max(5)

@@ -31,6 +31,8 @@ import {
   type UpdateSourceRequest,
 } from '@job-radar/shared';
 
+import type { ScoringCoordinator } from './scoring-coordinator.js';
+
 export class ScanCoordinatorError extends Error {
   public constructor(
     public readonly code:
@@ -49,6 +51,7 @@ export class ScanCoordinatorError extends Error {
 export interface ScanCoordinatorOptions {
   readonly connectors?: readonly JobConnector[];
   readonly now?: () => Date;
+  readonly scoring?: ScoringCoordinator;
 }
 
 interface ActiveExecution {
@@ -90,6 +93,7 @@ export class ScanCoordinator {
   private readonly profiles: ProfileRepository;
   private readonly connectors: ReadonlyMap<string, JobConnector>;
   private readonly now: () => Date;
+  private readonly scoring: ScoringCoordinator | undefined;
   private active: ActiveExecution | null = null;
 
   public constructor(
@@ -100,6 +104,7 @@ export class ScanCoordinator {
     this.jobs = new JobRepository(database);
     this.profiles = new ProfileRepository(database);
     this.now = options.now ?? (() => new Date());
+    this.scoring = options.scoring;
     const connectors = options.connectors ?? [
       new JobTechConnector(),
       new GenericWebConnector(),
@@ -290,7 +295,10 @@ export class ScanCoordinator {
       );
     }
     try {
-      return this.jobs.reprocessJobs(this.now());
+      const result = this.jobs.reprocessJobs(this.now());
+      const profile = this.profiles.getConfirmedView();
+      if (profile) this.scoring?.syncAllJobs(profile.version);
+      return result;
     } catch (error) {
       if (error instanceof ScanAlreadyActiveError) {
         throw new ScanCoordinatorError(
@@ -417,6 +425,8 @@ export class ScanCoordinator {
         const ingested = this.jobs.ingestJob(source, runId, normalized, this.now());
         counts[ingested.outcome] += 1;
         if (ingested.closed) counts.closed += 1;
+        const scoringProfile = this.profiles.getConfirmedView();
+        if (scoringProfile) this.scoring?.syncJob(ingested.jobId, scoringProfile.version);
       }
 
       const partial = counts.failed > 0;
@@ -427,6 +437,8 @@ export class ScanCoordinator {
         discovery.complete && !partial,
         this.now(),
       );
+      const scoringProfile = this.profiles.getConfirmedView();
+      if (scoringProfile) this.scoring?.syncAllJobs(scoringProfile.version);
       const errorSummary = partial
         ? `${counts.failed} discovered job detail${counts.failed === 1 ? '' : 's'} failed`
         : null;

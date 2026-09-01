@@ -1,7 +1,8 @@
 # Testing and verification
 
 All default tests use temporary directories and fictional/system-only data. They never
-read the normal local database, a real Profile/resume, credentials, or the network.
+read the normal local database, a real Profile/resume, credentials, or the network. The
+default suite never starts a real Codex CLI process.
 
 ## Deterministic coverage
 
@@ -25,6 +26,28 @@ read the normal local database, a real Profile/resume, credentials, or the netwo
   safety, lifecycle, duplicate scan protection, reprocessing, and job audit responses.
 - React tests cover Profile onboarding/versioning, Jobs list/detail/scan, and target-page
   add/test/edit/pause/enable/delete operations with source health and history rendering.
+- Scoring Gate table tests cover pass, fail, and unknown outcomes for closure, exclusions,
+  authorization/sponsorship/citizenship, location/work mode/remote scope, required
+  language, security clearance, and conflicting structured/extracted work modes.
+- Deterministic scoring tests cover all seven fixed dimensions, exact weights, evidence
+  depth, partial/unknown mappings, neutral missing rules, component rounding, integer
+  bounds, ranking clamps, freshness separation, target-company boost, extraction/Gate
+  uncertainty, reproducibility, and version rejection.
+- Provider tests use only a fake process. They cover the ephemeral/read-only/schema-bound
+  invocation, environment redaction, prompt-injection-shaped JD data, success, nonzero
+  exit, timeout, cancellation, invalid JSON, Schema-invalid JSON, final-output bounds, and
+  temporary-directory cleanup.
+- Scoring audit tests reject added Gate fields, nonexistent evidence, invented snippets,
+  missing matches/gaps, unexplained required skills, and version mismatch.
+- Repository/API tests cover idempotent enqueue/backfill, transactional claim/deduplication,
+  bounded exponential retry, explicit failed-task recovery, interrupted-task recovery,
+  invalid output producing no formal score, Gate non-overridability, forced rescore,
+  Profile/snapshot/extractor/scoring/lifecycle invalidation, closure Gate, reopening path,
+  and append-only requirements/scores/attempt history.
+- The offline eval runner executes 34 explicit fully fictional cases with expected Gate
+  outcome and exact match-score range. Coverage includes language, authorization,
+  sponsorship, citizenship, location, remote scope, seniority, evidence depth, soft
+  preferences, gaps, confidence, and unknowns.
 
 ## Commands
 
@@ -35,10 +58,16 @@ pnpm test
 pnpm build
 pnpm check
 pnpm format:check
+pnpm --filter @job-radar/scoring eval
 ```
 
 `pnpm check` runs lint, typecheck, tests, and build. Formatting remains an explicit
 non-mutating check.
+
+The 2026-09-01 M3 acceptance run passed 131 tests across 27 files: 15 shared, 5 config,
+27 connector, 28 scoring, 21 database, 30 API, and 5 web tests. The separate offline eval
+run passed 34/34 cases. `pnpm check`, formatting, diff checks, empty/M2-populated
+migrations, and production-style loopback health/readiness checks also passed.
 
 ## Migration checks
 
@@ -53,6 +82,9 @@ JOB_RADAR_DATABASE_PATH=/tmp/job-radar-migration/example.sqlite pnpm db:migrate
   source-specific snapshots, and merge events.
 - `0005_sweden_source_cleanup.sql` fixes JobTech to the Sweden Data/IT search policy and
   removes collection state if an unsupported legacy source exists. Profile history remains.
+- `0006_neat_clea.sql` adds the four M3 scoring tables without mutating M2 job, snapshot,
+  source, or Profile history. Tests migrate both an empty database and a database already
+  migrated through M2 with fictional current job/snapshot data.
 
 Verify a migrated disposable database with:
 
@@ -82,6 +114,7 @@ curl --fail http://127.0.0.1:8787/api/health
 curl --fail http://127.0.0.1:8787/api/readiness
 curl --fail http://127.0.0.1:8787/api/sources
 curl --fail 'http://127.0.0.1:8787/api/jobs?active=all'
+curl --fail 'http://127.0.0.1:8787/api/scoring/queue?limit=1'
 ```
 
 Starting a scan requires a Profile with at least one confirmed target role. Use a
@@ -97,5 +130,7 @@ that rather than calling fixtures live.
 
 ## Deferred tests
 
-M3 scoring evals, fuzzy-dedup evals, scheduler/crash recovery, large-volume performance,
-backup restore drills, and release automation remain in their owning later phases.
+M4 score-presentation/review UI, fuzzy-dedup evals, scheduler integration, large-volume
+performance, backup restore drills, and release automation remain in their owning later
+phases. Restart recovery for M3 scoring task state is already covered without introducing
+a resident scheduler.

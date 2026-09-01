@@ -22,6 +22,7 @@
   },
   "dependencies": {
     "@job-radar/config": "workspace:*",
+    "@job-radar/scoring": "workspace:*",
     "@job-radar/shared": "workspace:*",
     "better-sqlite3": "^13.0.3",
     "drizzle-orm": "^0.45.2"

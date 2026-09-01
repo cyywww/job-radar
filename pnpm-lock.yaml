@@ -58,6 +58,9 @@ importers:
       '@job-radar/db':
         specifier: workspace:*
         version: link:../../packages/db
+      '@job-radar/scoring':
+        specifier: workspace:*
+        version: link:../../packages/scoring
       '@job-radar/shared':
         specifier: workspace:*
         version: link:../../packages/shared
@@ -167,6 +170,9 @@ importers:
       '@job-radar/config':
         specifier: workspace:*
         version: link:../config
+      '@job-radar/scoring':
+        specifier: workspace:*
+        version: link:../scoring
       '@job-radar/shared':
         specifier: workspace:*
         version: link:../shared
@@ -186,6 +192,22 @@ importers:
       drizzle-kit:
         specifier: ^0.31.10
         version: 0.31.10
+      tsx:
+        specifier: ^4.23.12
+        version: 4.23.12
+
+  packages/scoring:
+    dependencies:
+      '@job-radar/shared':
+        specifier: workspace:*
+        version: link:../shared
+      zod:
+        specifier: ^4.4.3
+        version: 4.4.3
+    devDependencies:
+      '@job-radar/testing':
+        specifier: workspace:*
+        version: link:../testing
       tsx:
         specifier: ^4.23.12
         version: 4.23.12

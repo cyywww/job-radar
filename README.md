@@ -2,10 +2,11 @@
 
 Job Radar is a local-first workspace for finding Swedish Data/IT jobs. It keeps one
 evidence-backed candidate Profile, collects jobs from a deliberately small source set,
-deduplicates them deterministically, and records source health and immutable job history.
+deduplicates them deterministically, applies non-AI eligibility Gates, and produces
+evidence-linked, reproducible job scores.
 
-The repository contains no real profile, resume, credentials, captured jobs, AI scoring,
-or application tracking data. Tests and fixtures are fictional and offline.
+The repository contains no real profile, resume, credentials, captured jobs, model output,
+or application tracking data. Tests, scoring evals, and fixtures are fictional and offline.
 
 ## Requirements
 
@@ -32,6 +33,12 @@ Create and confirm a local Profile with at least one target role. The Sources wo
 shows JobTech / Platsbanken as the primary source and lets you add selected company career
 pages only when they add useful coverage. Jobs starts enabled sources and displays the
 normalized posting, all source links, merge reasons, lifecycle state, and change history.
+
+M3 scoring is deliberately explicit rather than a resident background service. A scan or
+Profile edit creates idempotent pending tasks, but Codex CLI extraction runs only when
+`POST /api/scoring/process` is called. Configure an authenticated local Codex CLI only for
+real extraction; default tests use a fake process and never call Codex or the network. See
+`docs/scoring.md` for the full Gate, schema, scoring, retry, and privacy contract.
 
 Use `Ctrl+C` to stop both processes. `pnpm dev:api` and `pnpm dev:web` run one side during
 focused development.
@@ -97,6 +104,14 @@ Sources and jobs:
 - `GET /api/jobs` and `GET /api/jobs/:id`
 - `POST /api/jobs/reprocess`
 
+Scoring:
+
+- `GET /api/scoring/queue`
+- `POST /api/scoring/backfill` and `POST /api/scoring/process`
+- `POST /api/scoring/tasks/:id/retry`
+- `POST /api/jobs/:id/rescore`
+- `GET /api/jobs/:id/scoring`
+
 All request and response boundaries use shared Zod contracts.
 
 ## Database migrations
@@ -111,6 +126,10 @@ removed source type, reproducible collection state is reset and unsupported sour
 are deleted; Profile/version history is untouched. This is an intentional clean break,
 not a compatibility layer.
 
+Migration `0006_neat_clea.sql` adds append-only job requirements, scores, scoring attempts,
+and an idempotent task queue. It does not rewrite existing M2 jobs or snapshots; an
+explicit backfill creates tasks for their current snapshots.
+
 After changing `packages/db/src/schema.ts`, generate and review a migration:
 
 ```bash
@@ -124,6 +143,7 @@ Database files and their WAL/SHM companions are ignored by Git.
 ```bash
 pnpm check
 pnpm format:check
+pnpm --filter @job-radar/scoring eval
 ```
 
 `pnpm check` runs lint, typecheck, offline tests, package builds, the Vite production

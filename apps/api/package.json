@@ -15,6 +15,7 @@
     "@job-radar/config": "workspace:*",
     "@job-radar/connectors": "workspace:*",
     "@job-radar/db": "workspace:*",
+    "@job-radar/scoring": "workspace:*",
     "@job-radar/shared": "workspace:*",
     "better-sqlite3": "^13.0.3",
     "dotenv": "^17.4.2",

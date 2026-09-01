@@ -13,6 +13,9 @@ describe('getAppConfig', () => {
     expect(config.databasePath).toBe(
       resolve('/workspace/job-radar', 'data/job-radar.sqlite'),
     );
+    expect(config.codexBinary).toBe('codex');
+    expect(config.scoringMaxAttempts).toBe(3);
+    expect(config.scoringReviewConfidence).toBe(0.65);
   });
 
   it('honors directory and database overrides', () => {
@@ -32,5 +35,34 @@ describe('getAppConfig', () => {
     expect(() => getAppConfig({ PORT: '70000' }, '/workspace/job-radar')).toThrow(
       ConfigurationError,
     );
+  });
+
+  it('validates bounded scoring process settings', () => {
+    const config = getAppConfig(
+      {
+        JOB_RADAR_CODEX_BINARY: '/opt/fictional/bin/codex',
+        JOB_RADAR_CODEX_MODEL: 'fictional-codex-model',
+        JOB_RADAR_SCORING_MAX_ATTEMPTS: '4',
+        JOB_RADAR_SCORING_RETRY_BASE_MS: '2000',
+        JOB_RADAR_SCORING_RETRY_MAX_MS: '8000',
+      },
+      '/workspace/job-radar',
+    );
+
+    expect(config.codexModel).toBe('fictional-codex-model');
+    expect(config.scoringMaxAttempts).toBe(4);
+    expect(config.scoringRetryMaxMs).toBe(8000);
+  });
+
+  it('rejects a scoring retry maximum below the base delay', () => {
+    expect(() =>
+      getAppConfig(
+        {
+          JOB_RADAR_SCORING_RETRY_BASE_MS: '8000',
+          JOB_RADAR_SCORING_RETRY_MAX_MS: '2000',
+        },
+        '/workspace/job-radar',
+      ),
+    ).toThrow(ConfigurationError);
   });
 });

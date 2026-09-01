@@ -25,6 +25,7 @@ import {
   validateProfileFilename,
 } from '../security/profile-import.js';
 import { extractProfileDraft } from '../services/profile-import.js';
+import type { ScoringCoordinator } from '../services/scoring-coordinator.js';
 
 const versionParamsSchema = z.object({ version: z.coerce.number().int().positive() });
 
@@ -45,12 +46,14 @@ function mapStoreError(error: unknown): never {
 export async function registerProfileRoutes(
   app: FastifyInstance,
   database: DatabaseClient,
+  scoring: ScoringCoordinator,
 ): Promise<void> {
   const repository = new ProfileRepository(database);
 
   app.post('/api/profile', async (request, reply) => {
     try {
       const profile = repository.create(createProfileRequestSchema.parse(request.body));
+      scoring.onProfileVersionChanged(profile.version);
       return reply.status(201).send(profileSnapshotSchema.parse(profile));
     } catch (error) {
       return mapStoreError(error);
@@ -65,9 +68,9 @@ export async function registerProfileRoutes(
 
   app.put('/api/profile', async (request) => {
     try {
-      return profileSnapshotSchema.parse(
-        repository.update(updateProfileRequestSchema.parse(request.body)),
-      );
+      const profile = repository.update(updateProfileRequestSchema.parse(request.body));
+      scoring.onProfileVersionChanged(profile.version);
+      return profileSnapshotSchema.parse(profile);
     } catch (error) {
       return mapStoreError(error);
     }
@@ -75,9 +78,9 @@ export async function registerProfileRoutes(
 
   app.post('/api/profile/confirm', async (request) => {
     try {
-      return profileSnapshotSchema.parse(
-        repository.confirm(confirmProfileRequestSchema.parse(request.body)),
-      );
+      const profile = repository.confirm(confirmProfileRequestSchema.parse(request.body));
+      scoring.onProfileVersionChanged(profile.version);
+      return profileSnapshotSchema.parse(profile);
     } catch (error) {
       return mapStoreError(error);
     }
@@ -120,9 +123,11 @@ export async function registerProfileRoutes(
 
   app.put('/api/preferences', async (request) => {
     try {
-      return profileSnapshotSchema.parse(
-        repository.updatePreferences(updatePreferencesRequestSchema.parse(request.body)),
+      const profile = repository.updatePreferences(
+        updatePreferencesRequestSchema.parse(request.body),
       );
+      scoring.onProfileVersionChanged(profile.version);
+      return profileSnapshotSchema.parse(profile);
     } catch (error) {
       return mapStoreError(error);
     }

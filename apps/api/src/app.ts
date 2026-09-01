@@ -12,18 +12,22 @@ import { ZodError } from 'zod';
 import type { AppConfig } from '@job-radar/config';
 import type { JobConnector } from '@job-radar/connectors';
 import type { DatabaseClient } from '@job-radar/db';
+import type { AIProvider } from '@job-radar/scoring';
 import { AppError, errorResponseSchema } from '@job-radar/shared';
 
 import { registerHealthRoutes } from './routes/health.js';
 import { registerJobRoutes } from './routes/jobs.js';
 import { registerProfileRoutes } from './routes/profile.js';
+import { registerScoringRoutes } from './routes/scoring.js';
 import { ScanCoordinator } from './services/scan-coordinator.js';
+import { ScoringCoordinator } from './services/scoring-coordinator.js';
 
 export interface BuildAppOptions {
   readonly config: AppConfig;
   readonly database: DatabaseClient;
   readonly logger?: FastifyBaseLogger | false;
   readonly connectors?: readonly JobConnector[];
+  readonly scoringProvider?: AIProvider;
 }
 
 function statusAndCode(error: unknown): { statusCode: number; code: string } {
@@ -101,11 +105,16 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
   );
 
   await registerHealthRoutes(app, options.database);
-  await registerProfileRoutes(app, options.database);
+  const scoring = new ScoringCoordinator(options.database, app.log, options.config, {
+    ...(options.scoringProvider ? { provider: options.scoringProvider } : {}),
+  });
+  await registerProfileRoutes(app, options.database, scoring);
   const coordinator = new ScanCoordinator(options.database, app.log, {
     ...(options.connectors ? { connectors: options.connectors } : {}),
+    scoring,
   });
   await registerJobRoutes(app, options.database, coordinator);
+  await registerScoringRoutes(app, scoring);
 
   const indexPath = join(options.config.webDistDir, 'index.html');
   const assetsPath = join(options.config.webDistDir, 'assets');

@@ -261,3 +261,52 @@ events before deleting unsupported sources. Keeping partial history would requir
 configuration contracts and could leave misleading provenance. Collection data can be
 scanned again; immutable candidate Profile/version history is unrelated and remains
 untouched.
+
+## ADR-033: AI extraction cannot make eligibility or score decisions
+
+The strict model output is limited to job requirements, evidence proposals, gaps,
+unknowns, fit labels, and confidence. A separate audit verifies the current snapshot and
+confirmed Profile evidence IDs. Code then runs the eligibility Gate and versioned scoring
+algorithm. Strict Zod objects reject additional Gate or score properties, so a posting's
+prompt-like text or a model response cannot change policy, weights, versions, or final
+scores. This keeps model variability outside the decisive boundary.
+
+## ADR-034: M3 has one hardened Codex CLI provider
+
+`AIProvider` currently has exactly one implementation and provider ID: `codex_cli`. The
+non-interactive process runs in a new temporary working directory with ephemeral state,
+read-only sandboxing, Schema-constrained output, integrations disabled, no shell, bounded
+time/output, cancellation, a minimal environment with a temporary isolated `HOME`, and
+cleanup. Only minimized confirmed
+evidence plus the current snapshot text are supplied. An unneeded OpenAI API provider,
+placeholder, or fallback would expand secret handling and untested behavior, so none is
+present.
+
+## ADR-035: eligibility failures are not low scores
+
+The deterministic Gate evaluates closure, confirmed exclusions, authorization,
+citizenship/sponsorship, location/work mode, required language, and security clearance
+before scoring. Explicit contradiction makes the job ineligible; missing facts are
+unknown rather than failure. Ineligible records retain extraction and human/machine Gate
+reasons but database constraints require all numeric scores and breakdowns to be null.
+This preserves the semantic difference between “cannot qualify” and “weak match.”
+
+## ADR-036: match and ranking use separate versioned calculations
+
+`deterministic-weighted-v1` owns the immutable 30/20/15/15/8/7/5 weights, ratio mappings,
+neutral values, rounding, and bounds. `matchScore` contains only evidence/fit dimensions
+and is independent of publication time. `rankingScore` adds recorded-as-of freshness and
+confirmed target-company boost, then subtracts capped extraction/Gate uncertainty. Saving
+all versions and `rankingAsOf` makes identical inputs reproducible while allowing later
+ranking policy to change without rewriting historical match quality.
+
+## ADR-037: scoring history is append-only and work is explicitly bounded
+
+SQLite gives each task a unique job/snapshot/Profile/extractor/scoring identity and each
+attempt a unique monotonically increasing number. Transactional claim prevents concurrent
+execution; startup converts interrupted running attempts into safe durable failures.
+Automatic retries use capped exponential backoff and a finite budget. Explicit retry,
+rescore, or backfill grants another finite window without deleting attempts, requirements,
+or scores. Snapshot, Profile, extractor, scoring, and lifecycle changes invalidate current
+results and enqueue the matching identity. M3 exposes a bounded process endpoint instead
+of introducing the M5 scheduler or resident worker early.
