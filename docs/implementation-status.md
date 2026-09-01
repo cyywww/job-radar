@@ -69,6 +69,21 @@ strict extraction audit, code-owned Gate, fixed 30/20/15/15/8/7/5 scoring, separ
 ranking, confidence/unknown review triggers, append-only history, retry, invalidation, and
 safe backfill remain unchanged.
 
+## Manual AI usage controls
+
+- Real scoring requires the user to set an exact `JOB_RADAR_CODEX_MODEL`; the app and
+  manual scans remain usable without AI configuration, while scoring fails before task
+  claim instead of inheriting an unknown CLI default.
+- The Jobs UI processes one job per explicit click, and there is still no scheduler or
+  resident worker. Codex CLI has no supported hard token/currency budget, so the app does
+  not expose an approximate limit as a guarantee.
+- Codex JSONL usage is required for accepted output. Every new attempt records actual
+  input/cached/output/reasoning counts, output bytes, and model; the
+  detail panel shows total usage without replacing or modifying the formal M3 score.
+- The design follows the useful `job-scan` lessons—deterministic work before AI, only
+  pending items sent to a model, and bounded manual runs—without copying its scheduler,
+  heuristics, or provider-specific USD flag.
+
 ## Database migration
 
 Migration `0007_bizarre_richard_fisk.sql` adds `job_triage`, `score_feedback`, and
@@ -82,17 +97,21 @@ populated M3 database containing a fictional confirmed Profile, job, snapshot,
 requirement, formal score, and attempt. The M3-to-M4 fixture retains exact score/version/
 review values and history while the new review tables begin empty.
 
+Migration `0008_melted_purple_man.sql` adds nullable token-usage columns to
+`scoring_attempts`. Existing attempts retain all prior fields and receive null usage;
+new success and auditable failure attempts persist CLI-reported counts.
+
 ## Verification result
 
 Verified on 2026-09-01 with Node 22.16 and pnpm 11.19:
 
 - `pnpm lint`, `pnpm format:check`, `pnpm typecheck`, `pnpm test`, `pnpm build`,
   `pnpm check`, and `git diff --check` passed.
-- The offline suite passed 161 tests across 30 files: 22 shared, 5 config, 27
-  connector, 28 scoring, 30 database, 35 API, and 14 web tests.
+- The offline suite passed 168 tests across 31 files: 25 shared, 5 config, 27
+  connector, 29 scoring, 30 database, 37 API, and 15 web tests.
 - The standalone scoring eval passed all 34 explicit fictional cases.
-- An empty disposable database migrated through `0007`; SQLite integrity returned `ok`,
-  foreign-key checking returned no rows, and all three M4 tables were present.
+- An empty disposable database migrated through `0008`; SQLite integrity returned `ok`,
+  foreign-key checking returned no rows, and all token-audit columns were present.
 - The populated M3 migration test retained its fictional confirmed Profile, job, snapshot,
   requirement, formal match/ranking scores, scoring/review versions, and attempt; new M4
   review tables were empty and terminal runs became `complete`.
@@ -101,6 +120,9 @@ Verified on 2026-09-01 with Node 22.16 and pnpm 11.19:
   Sources, Runs, and terminal SSE returned HTTP 200. SSE contained terminal run state and
   no description. A triage update survived a new detail read and exact transactional undo
   restored `new`.
+- A second production-style disposable run with no configured model returned ready health,
+  readiness, and built-root responses while `/api/scoring/config` reported `ready=false`
+  and `model=null`; no Codex process was started.
 - Browser verification covered Dashboard, Jobs, Detail, and Sources/Runs at the desktop
   viewport and at 390 px. Navigation remained usable, support/stage labels were visible,
   and the console contained no warnings or errors.

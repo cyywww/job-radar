@@ -11,6 +11,7 @@ import {
   jobRequirementSchema,
   jobScoreSchema,
   scoreReviewStateSchema,
+  scoringAttemptSchema,
   scoringTaskSchema,
   scoringTaskStatusSchema,
 } from './scoring.js';
@@ -258,6 +259,7 @@ export const jobReviewDetailSchema = z
     currentRequirement: jobRequirementSchema.nullable(),
     scoreHistory: z.array(jobScoreSchema),
     tasks: z.array(scoringTaskSchema),
+    attempts: z.array(scoringAttemptSchema),
     feedback: z.array(scoreFeedbackSchema),
     reviewHistory: z.array(scoreReviewEventSchema),
   })

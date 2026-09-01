@@ -112,22 +112,44 @@ compatibility branch. It follows the official Codex CLI non-interactive contract
 `--output-last-message`. It also ignores repository/user instructions, disables tool,
 browser, app, plugin, hook, and multi-agent features, and skips repository discovery.
 
-Each attempt creates a private temporary directory and writes only three mode-0600 inputs:
-a minimized confirmed Profile, the current normalized snapshot text, and the JSON Schema.
-Names, employers, institutions, provenance excerpts, the SQLite database, repository
-source, and unrelated environment variables are not supplied. The process uses an argv
-array with `shell:false`, a small environment allowlist, a temporary isolated `HOME`, only
-the authentication-bearing `CODEX_HOME` path when available, bounded stdout/stderr and
-final output, timeout, cancellation, exit checks, and unconditional recursive cleanup.
+Each attempt creates a private temporary directory, writes the output Schema with mode
+0600, and receives the minimized confirmed Profile plus current normalized snapshot as
+bounded prompt data on stdin. The SQLite database, repository source, and unrelated
+environment variables are not supplied. The process uses an argv array with `shell:false`,
+a small environment allowlist, a temporary isolated `HOME`, only the
+authentication-bearing `CODEX_HOME` path when available, bounded stdout/stderr and final
+output, timeout, cancellation, exit checks, and unconditional recursive cleanup.
 
 JD and Profile strings are marked as untrusted data in a static prompt. No prompt, model
 output, full JD/Profile, evidence text, secret, token, cookie, or environment dump is
-logged. Failure audit stores only bounded safe codes/summaries, byte count, and an output
-hash when available.
+logged. Failure audit stores only bounded safe codes/summaries, byte count, token counts
+when the CLI emitted them, and an output hash when available.
+
+### Model choice and token accounting
+
+Real scoring requires an explicit `JOB_RADAR_CODEX_MODEL`; Job Radar never falls back to
+the model selected in a user's Codex configuration. `GET /api/scoring/config` exposes only
+whether scoring is ready and the selected model. Missing model
+configuration returns `SCORING_MODEL_NOT_CONFIGURED` before a task is claimed or Codex is
+started.
+
+Current Codex CLI has no official `max-budget-usd` or `max_output_tokens` switch for
+`codex exec`, so Job Radar does not claim to enforce an approximate token budget. The
+default Jobs action still processes one attempt per explicit click; a caller that posts a
+larger API `limit` is deliberately authorizing more calls.
+
+`codex exec --json` emits the authoritative completed-turn usage. Job Radar requires that
+event before accepting output and stores input, cached input, output, reasoning output,
+and output byte count on the append-only attempt. `totalTokens` is defined as input plus
+output; cached input is already part of input and reasoning output is already part of
+output, so neither is double-counted. If usage is missing, the attempt fails closed without
+a formal score and is not automatically retried. Existing pre-migration attempts remain
+valid with null usage because their real counts cannot be reconstructed.
 
 References:
 
 - [Codex non-interactive mode](https://learn.chatgpt.com/docs/non-interactive-mode)
+- [Codex configuration reference](https://learn.chatgpt.com/docs/config-file/config-reference)
 - [Codex CLI developer commands](https://learn.chatgpt.com/docs/developer-commands?surface=cli)
 - [Codex sandboxing](https://learn.chatgpt.com/docs/sandboxing)
 
@@ -153,6 +175,7 @@ explicitly.
 
 The API is an orchestration/query boundary only:
 
+- `GET /api/scoring/config`
 - `GET /api/scoring/queue`
 - `POST /api/scoring/backfill`
 - `POST /api/scoring/process`

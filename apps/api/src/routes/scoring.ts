@@ -6,6 +6,7 @@ import {
   jobScoringHistorySchema,
   scoringBackfillRequestSchema,
   scoringBackfillResultSchema,
+  scoringConfigurationSchema,
   scoringProcessRequestSchema,
   scoringProcessResultSchema,
   scoringQueueQuerySchema,
@@ -25,7 +26,9 @@ function mapScoringError(error: unknown): never {
   const statusCode =
     error.code === 'SCORING_JOB_NOT_FOUND' || error.code === 'SCORING_TASK_NOT_FOUND'
       ? 404
-      : error.code === 'SCORING_RUN_ACTIVE' || error.code === 'SCORING_TASK_NOT_RETRYABLE'
+      : error.code === 'SCORING_RUN_ACTIVE' ||
+          error.code === 'SCORING_TASK_NOT_RETRYABLE' ||
+          error.code === 'SCORING_MODEL_NOT_CONFIGURED'
         ? 409
         : 400;
   throw new AppError(error.code, error.message, statusCode);
@@ -35,6 +38,10 @@ export async function registerScoringRoutes(
   app: FastifyInstance,
   coordinator: ScoringCoordinator,
 ): Promise<void> {
+  app.get('/api/scoring/config', async () =>
+    scoringConfigurationSchema.parse(coordinator.configuration()),
+  );
+
   app.get('/api/scoring/queue', async (request) => {
     const query = scoringQueueQuerySchema.parse(request.query);
     return scoringQueueResponseSchema.parse({

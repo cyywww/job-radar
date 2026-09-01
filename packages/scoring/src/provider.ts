@@ -4,7 +4,12 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { spawn } from 'node:child_process';
 
-import { jobExtractionSchema, type ConfirmedProfileView } from '@job-radar/shared';
+import {
+  jobExtractionSchema,
+  scoringTokenUsageSchema,
+  type ConfirmedProfileView,
+  type ScoringTokenUsage,
+} from '@job-radar/shared';
 import { z } from 'zod';
 
 import type {
@@ -22,28 +27,76 @@ export type ProviderErrorCode =
   | 'process_failed'
   | 'invalid_json'
   | 'schema_invalid'
+  | 'usage_missing'
   | 'io_error';
+
+interface ProviderErrorDetails {
+  readonly outputBytes?: number;
+  readonly outputHash?: string | null;
+  readonly usage?: ScoringTokenUsage | null;
+}
 
 export class ProviderError extends Error {
   public constructor(
     public readonly code: ProviderErrorCode,
     message: string,
-    public readonly outputBytes = 0,
-    public readonly outputHash: string | null = null,
+    details: ProviderErrorDetails = {},
   ) {
     super(message);
     this.name = 'ProviderError';
+    this.outputBytes = details.outputBytes ?? 0;
+    this.outputHash = details.outputHash ?? null;
+    this.usage = details.usage ?? null;
   }
+
+  public readonly outputBytes: number;
+  public readonly outputHash: string | null;
+  public readonly usage: ScoringTokenUsage | null;
 }
 
 export interface CodexCliProviderOptions {
   readonly binary: string;
-  readonly model?: string;
+  readonly model: string;
   readonly timeoutMs: number;
   readonly maxOutputBytes: number;
   readonly tempRoot?: string;
   readonly runner?: ProcessRunner;
   readonly environment?: NodeJS.ProcessEnv;
+}
+
+const completedTurnSchema = z
+  .object({
+    type: z.literal('turn.completed'),
+    usage: z
+      .object({
+        input_tokens: z.number().int().nonnegative(),
+        cached_input_tokens: z.number().int().nonnegative(),
+        output_tokens: z.number().int().nonnegative(),
+        reasoning_output_tokens: z.number().int().nonnegative(),
+      })
+      .passthrough(),
+  })
+  .passthrough();
+
+function completedUsage(stdout: string): ScoringTokenUsage | null {
+  let usage: ScoringTokenUsage | null = null;
+  for (const line of stdout.split(/\r?\n/u)) {
+    if (!line.trim()) continue;
+    try {
+      const event = completedTurnSchema.safeParse(JSON.parse(line));
+      if (!event.success) continue;
+      usage = scoringTokenUsageSchema.parse({
+        inputTokens: event.data.usage.input_tokens,
+        cachedInputTokens: event.data.usage.cached_input_tokens,
+        outputTokens: event.data.usage.output_tokens,
+        reasoningOutputTokens: event.data.usage.reasoning_output_tokens,
+        totalTokens: event.data.usage.input_tokens + event.data.usage.output_tokens,
+      });
+    } catch {
+      // Non-event diagnostics remain untrusted and are intentionally ignored.
+    }
+  }
+  return usage;
 }
 
 function outputHash(value: string): string {
@@ -181,7 +234,7 @@ export class NodeProcessRunner implements ProcessRunner {
             new ProviderError(
               'output_too_large',
               'Codex CLI exceeded the bounded process-output limit.',
-              totalBytes,
+              { outputBytes: totalBytes },
             ),
           );
           return;
@@ -224,37 +277,30 @@ export class CodexCliProvider implements AIProvider {
   private readonly runner: ProcessRunner;
 
   public constructor(private readonly options: CodexCliProviderOptions) {
-    this.model = options.model ?? 'codex-cli-default';
+    this.model = options.model;
     this.runner = options.runner ?? new NodeProcessRunner();
   }
 
   public async extract(request: ExtractionRequest) {
+    const profileJson = JSON.stringify(minimalProfile(request.profile));
+    const jobJson = JSON.stringify({
+      snapshotId: request.job.snapshotId,
+      company: request.job.company,
+      title: request.job.title,
+      location: request.job.location,
+      remoteMode: request.job.remoteMode,
+      employmentType: request.job.employmentType,
+      descriptionText: request.job.descriptionText,
+    });
+    const schemaJson = JSON.stringify(z.toJSONSchema(jobExtractionSchema));
+    const prompt = promptFor(request, profileJson, jobJson);
     const temporaryDirectory = await mkdtemp(
       join(this.options.tempRoot ?? tmpdir(), 'job-radar-score-'),
     );
-    const profilePath = join(temporaryDirectory, 'confirmed-profile.json');
-    const jobPath = join(temporaryDirectory, 'job.json');
     const schemaPath = join(temporaryDirectory, 'output-schema.json');
     const outputPath = join(temporaryDirectory, 'output.json');
     try {
-      const profileJson = JSON.stringify(minimalProfile(request.profile));
-      const jobJson = JSON.stringify({
-        snapshotId: request.job.snapshotId,
-        company: request.job.company,
-        title: request.job.title,
-        location: request.job.location,
-        remoteMode: request.job.remoteMode,
-        employmentType: request.job.employmentType,
-        descriptionText: request.job.descriptionText,
-      });
-      await Promise.all([
-        writeFile(profilePath, profileJson, { encoding: 'utf8', mode: 0o600 }),
-        writeFile(jobPath, jobJson, { encoding: 'utf8', mode: 0o600 }),
-        writeFile(schemaPath, JSON.stringify(z.toJSONSchema(jobExtractionSchema)), {
-          encoding: 'utf8',
-          mode: 0o600,
-        }),
-      ]);
+      await writeFile(schemaPath, schemaJson, { encoding: 'utf8', mode: 0o600 });
       const args = [
         'exec',
         '--ephemeral',
@@ -270,6 +316,7 @@ export class CodexCliProvider implements AIProvider {
         schemaPath,
         '--output-last-message',
         outputPath,
+        '--json',
         '--color',
         'never',
         '--disable',
@@ -286,7 +333,8 @@ export class CodexCliProvider implements AIProvider {
         'hooks',
         '--disable',
         'multi_agent',
-        ...(this.options.model ? ['--model', this.options.model] : []),
+        '--model',
+        this.options.model,
         '-',
       ];
       const result = await this.runner.run({
@@ -297,20 +345,29 @@ export class CodexCliProvider implements AIProvider {
           this.options.environment ?? process.env,
           temporaryDirectory,
         ),
-        stdin: promptFor(request, profileJson, jobJson),
+        stdin: prompt,
         timeoutMs: this.options.timeoutMs,
         maxOutputBytes: this.options.maxOutputBytes,
         ...(request.signal ? { signal: request.signal } : {}),
       });
+      const usage = completedUsage(result.stdout);
       if (result.exitCode !== 0) {
-        throw new ProviderError('process_failed', 'Codex CLI extraction failed.');
+        throw new ProviderError('process_failed', 'Codex CLI extraction failed.', {
+          usage,
+        });
+      }
+      if (!usage) {
+        throw new ProviderError(
+          'usage_missing',
+          'Codex CLI completed without auditable token usage.',
+        );
       }
       const fileStats = await stat(outputPath);
       if (fileStats.size > this.options.maxOutputBytes) {
         throw new ProviderError(
           'output_too_large',
           'Codex CLI output file exceeded the bounded size limit.',
-          fileStats.size,
+          { outputBytes: fileStats.size, usage },
         );
       }
       const output = await readFile(outputPath, 'utf8');
@@ -318,23 +375,29 @@ export class CodexCliProvider implements AIProvider {
       try {
         raw = JSON.parse(output);
       } catch {
-        throw new ProviderError(
-          'invalid_json',
-          'Codex CLI returned invalid JSON.',
-          Buffer.byteLength(output),
-          outputHash(output),
-        );
+        throw new ProviderError('invalid_json', 'Codex CLI returned invalid JSON.', {
+          outputBytes: Buffer.byteLength(output),
+          outputHash: outputHash(output),
+          usage,
+        });
       }
       const parsed = jobExtractionSchema.safeParse(raw);
       if (!parsed.success) {
         throw new ProviderError(
           'schema_invalid',
           'Codex CLI output did not match the extraction schema.',
-          Buffer.byteLength(output),
-          outputHash(output),
+          {
+            outputBytes: Buffer.byteLength(output),
+            outputHash: outputHash(output),
+            usage,
+          },
         );
       }
-      return parsed.data;
+      return {
+        extraction: parsed.data,
+        usage,
+        outputBytes: Buffer.byteLength(output),
+      };
     } catch (error) {
       if (error instanceof ProviderError) throw error;
       throw new ProviderError('io_error', 'Codex CLI provider failed safely.');

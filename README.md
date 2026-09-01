@@ -38,10 +38,22 @@ separate correction feedback. Sources keeps JobTech / Platsbanken primary and al
 selected company career pages as a limited supplement.
 
 Scoring remains deliberately explicit rather than a resident background service. A scan or
-Profile edit creates idempotent pending tasks, but Codex CLI extraction runs only when
-`POST /api/scoring/process` is called. Configure an authenticated local Codex CLI only for
-real extraction; default tests use a fake process and never call Codex or the network. See
-`docs/scoring.md` for the full Gate, schema, scoring, retry, and privacy contract.
+Profile edit creates idempotent pending tasks, but Codex CLI extraction runs only when the
+user clicks **Process scoring queue** or calls `POST /api/scoring/process`. The normal UI
+processes one job per click. Before real extraction, authenticate Codex CLI and set the
+exact approved model in `.env.local`; the server starts normally without it, but scoring
+stays disabled rather than silently using a CLI default:
+
+```dotenv
+JOB_RADAR_CODEX_MODEL=your-approved-codex-model
+```
+
+Codex CLI does not expose an equivalent of a hard USD or `max_output_tokens` budget, so
+Job Radar does not present an approximate limit as a guarantee. Every completed attempt
+instead records the CLI-reported input, cached-input, output, reasoning-output, and total
+token usage. The Jobs detail panel shows the actual usage. Default tests use a fake
+process and never call Codex or the network. See `docs/scoring.md` for the exact cost,
+Gate, schema, retry, and privacy contract.
 
 The Jobs detail panel renders the complete description as untrusted plain text. It never
 injects posting HTML, source metadata, model output, or prompts. `matchScore` remains the M3
@@ -120,6 +132,7 @@ Sources and jobs:
 
 Scoring:
 
+- `GET /api/scoring/config`
 - `GET /api/scoring/queue`
 - `POST /api/scoring/backfill` and `POST /api/scoring/process`
 - `POST /api/scoring/tasks/:id/retry`
@@ -156,6 +169,11 @@ score feedback and review events, and durable scan/source stages with source fai
 classification. Existing terminal M3 runs are mapped to `complete`; existing Profiles,
 jobs, snapshots, requirements, scores, and attempts are retained without rewriting formal
 score values.
+
+Migration `0008_melted_purple_man.sql` adds nullable token-usage columns to
+append-only scoring attempts. Existing attempts retain their model, outcome, byte count,
+timestamps, and error audit; their usage fields remain null because historical usage
+cannot be reconstructed safely.
 
 After changing `packages/db/src/schema.ts`, generate and review a migration:
 

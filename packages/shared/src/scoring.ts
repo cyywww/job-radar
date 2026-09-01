@@ -337,6 +337,64 @@ export const scoringTaskSchema = z
   })
   .strict();
 
+export const scoringTokenUsageSchema = z
+  .object({
+    inputTokens: z.number().int().nonnegative(),
+    cachedInputTokens: z.number().int().nonnegative(),
+    outputTokens: z.number().int().nonnegative(),
+    reasoningOutputTokens: z.number().int().nonnegative(),
+    totalTokens: z.number().int().nonnegative(),
+  })
+  .strict()
+  .superRefine((value, context) => {
+    if (value.cachedInputTokens > value.inputTokens) {
+      context.addIssue({
+        code: 'custom',
+        path: ['cachedInputTokens'],
+        message: 'Cached input tokens cannot exceed input tokens',
+      });
+    }
+    if (value.reasoningOutputTokens > value.outputTokens) {
+      context.addIssue({
+        code: 'custom',
+        path: ['reasoningOutputTokens'],
+        message: 'Reasoning output tokens cannot exceed output tokens',
+      });
+    }
+    if (value.totalTokens !== value.inputTokens + value.outputTokens) {
+      context.addIssue({
+        code: 'custom',
+        path: ['totalTokens'],
+        message: 'Total tokens must equal input plus output tokens',
+      });
+    }
+  });
+
+export const scoringAttemptSchema = z
+  .object({
+    id: z.string().uuid(),
+    taskId: z.string().uuid(),
+    attemptNumber: z.number().int().positive(),
+    outcome: z.enum(['succeeded', 'failed', 'cancelled', 'timeout', 'invalid_output']),
+    provider: z.literal('codex_cli'),
+    model: boundedText(120),
+    errorCode: boundedText(80).nullable(),
+    errorSummary: boundedText(500).nullable(),
+    outputBytes: z.number().int().nonnegative(),
+    usage: scoringTokenUsageSchema.nullable(),
+    startedAt: z.string().datetime({ offset: true }),
+    finishedAt: z.string().datetime({ offset: true }),
+  })
+  .strict();
+
+export const scoringConfigurationSchema = z
+  .object({
+    ready: z.boolean(),
+    provider: z.literal('codex_cli'),
+    model: boundedText(120).nullable(),
+  })
+  .strict();
+
 export const jobRequirementSchema = z
   .object({
     id: z.string().uuid(),
@@ -427,6 +485,7 @@ export const scoringProcessResultSchema = z
     review: z.number().int().nonnegative(),
     pendingRetry: z.number().int().nonnegative(),
     failed: z.number().int().nonnegative(),
+    usage: scoringTokenUsageSchema,
   })
   .strict();
 export const jobScoringHistorySchema = z
@@ -435,6 +494,7 @@ export const jobScoringHistorySchema = z
     requirements: z.array(jobRequirementSchema),
     scores: z.array(jobScoreSchema),
     tasks: z.array(scoringTaskSchema),
+    attempts: z.array(scoringAttemptSchema),
   })
   .strict();
 
@@ -449,6 +509,9 @@ export type ScoreBreakdown = z.infer<typeof scoreBreakdownSchema>;
 export type RankingFactors = z.infer<typeof rankingFactorsSchema>;
 export type ScoringTask = z.infer<typeof scoringTaskSchema>;
 export type ScoringTaskStatus = z.infer<typeof scoringTaskStatusSchema>;
+export type ScoringTokenUsage = z.infer<typeof scoringTokenUsageSchema>;
+export type ScoringAttempt = z.infer<typeof scoringAttemptSchema>;
+export type ScoringConfiguration = z.infer<typeof scoringConfigurationSchema>;
 export type JobRequirement = z.infer<typeof jobRequirementSchema>;
 export type JobScore = z.infer<typeof jobScoreSchema>;
 export type ScoringBackfillResult = z.infer<typeof scoringBackfillResultSchema>;

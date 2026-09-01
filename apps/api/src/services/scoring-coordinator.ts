@@ -22,17 +22,21 @@ import {
 } from '@job-radar/scoring';
 import {
   scoringJobInputSchema,
+  scoringConfigurationSchema,
   type ExtractedUnknown,
+  type ScoringConfiguration,
   type ScoringBackfillResult,
   type ScoringProcessResult,
   type ScoringTask,
   type ScoringTaskStatus,
+  type ScoringTokenUsage,
 } from '@job-radar/shared';
 
 export class ScoringCoordinatorError extends Error {
   public constructor(
     public readonly code:
       | 'SCORING_RUN_ACTIVE'
+      | 'SCORING_MODEL_NOT_CONFIGURED'
       | 'SCORING_PROFILE_NOT_READY'
       | 'SCORING_TASK_NOT_FOUND'
       | 'SCORING_JOB_NOT_FOUND'
@@ -89,7 +93,7 @@ function mapRepositoryError(error: unknown): never {
 export class ScoringCoordinator {
   private readonly repository: ScoringRepository;
   private readonly profiles: ProfileRepository;
-  private readonly provider: AIProvider;
+  private readonly provider: AIProvider | null;
   private readonly now: () => Date;
   private active = false;
 
@@ -105,14 +109,16 @@ export class ScoringCoordinator {
       retryMaxMs: config.scoringRetryMaxMs,
     });
     this.profiles = new ProfileRepository(database);
-    this.provider =
-      options.provider ??
-      new CodexCliProvider({
-        binary: config.codexBinary,
-        ...(config.codexModel ? { model: config.codexModel } : {}),
-        timeoutMs: config.scoringTimeoutMs,
-        maxOutputBytes: config.scoringMaxOutputBytes,
-      });
+    this.provider = options.provider
+      ? options.provider
+      : config.codexModel
+        ? new CodexCliProvider({
+            binary: config.codexBinary,
+            model: config.codexModel,
+            timeoutMs: config.scoringTimeoutMs,
+            maxOutputBytes: config.scoringMaxOutputBytes,
+          })
+        : null;
     this.now = options.now ?? (() => new Date());
     const recovered = this.repository.recoverRunning(this.now());
     if (recovered > 0) {
@@ -125,6 +131,14 @@ export class ScoringCoordinator {
 
   public list(status: ScoringTaskStatus | undefined, limit: number): ScoringTask[] {
     return this.repository.listTasks(status, limit);
+  }
+
+  public configuration(): ScoringConfiguration {
+    return scoringConfigurationSchema.parse({
+      ready: this.provider !== null,
+      provider: 'codex_cli',
+      model: this.provider?.model ?? null,
+    });
   }
 
   public backfill(includeClosed: boolean): ScoringBackfillResult {
@@ -224,6 +238,12 @@ export class ScoringCoordinator {
     limit: number,
     signal?: AbortSignal,
   ): Promise<ScoringProcessResult> {
+    if (!this.provider) {
+      throw new ScoringCoordinatorError(
+        'SCORING_MODEL_NOT_CONFIGURED',
+        'Set JOB_RADAR_CODEX_MODEL before processing the scoring queue.',
+      );
+    }
     if (this.active) {
       throw new ScoringCoordinatorError(
         'SCORING_RUN_ACTIVE',
@@ -237,6 +257,13 @@ export class ScoringCoordinator {
       review: 0,
       pendingRetry: 0,
       failed: 0,
+      usage: {
+        inputTokens: 0,
+        cachedInputTokens: 0,
+        outputTokens: 0,
+        reasoningOutputTokens: 0,
+        totalTokens: 0,
+      },
     };
     try {
       for (let index = 0; index < limit; index += 1) {
@@ -244,8 +271,15 @@ export class ScoringCoordinator {
         const claimed = this.repository.claimNext(this.now());
         if (!claimed) break;
         result.claimed += 1;
-        const outcome = await this.processClaimed(claimed, signal);
-        result[outcome] += 1;
+        const processed = await this.processClaimed(claimed, signal);
+        result[processed.outcome] += 1;
+        if (processed.usage) {
+          result.usage.inputTokens += processed.usage.inputTokens;
+          result.usage.cachedInputTokens += processed.usage.cachedInputTokens;
+          result.usage.outputTokens += processed.usage.outputTokens;
+          result.usage.reasoningOutputTokens += processed.usage.reasoningOutputTokens;
+          result.usage.totalTokens += processed.usage.totalTokens;
+        }
       }
       return result;
     } finally {
@@ -256,7 +290,17 @@ export class ScoringCoordinator {
   private async processClaimed(
     claimed: NonNullable<ReturnType<ScoringRepository['claimNext']>>,
     signal?: AbortSignal,
-  ): Promise<'succeeded' | 'review' | 'pendingRetry' | 'failed'> {
+  ): Promise<{
+    outcome: 'succeeded' | 'review' | 'pendingRetry' | 'failed';
+    usage: ScoringTokenUsage | null;
+  }> {
+    const provider = this.provider;
+    if (!provider) {
+      throw new ScoringCoordinatorError(
+        'SCORING_MODEL_NOT_CONFIGURED',
+        'Set JOB_RADAR_CODEX_MODEL before processing the scoring queue.',
+      );
+    }
     const profile = this.profiles.getConfirmedView(claimed.task.profileVersion);
     const currentProfile = this.profiles.getConfirmedView();
     if (
@@ -268,26 +312,36 @@ export class ScoringCoordinator {
         code: 'stale_profile',
         summary: 'The confirmed Profile changed before this scoring attempt completed.',
         outcome: 'failed',
-        provider: this.provider.id,
-        model: this.provider.model,
+        provider: provider.id,
+        model: provider.model,
         outputHash: null,
         outputBytes: 0,
+        usage: null,
+        retryable: false,
         now: this.now(),
       });
       if (currentProfile)
         this.repository.syncAll(currentProfile.version, versions, true, this.now());
-      return 'failed';
+      return { outcome: 'failed', usage: null };
     }
+    let providerAudit: {
+      usage: ScoringTokenUsage;
+      outputBytes: number;
+    } | null = null;
     try {
       const job = scoringJobInputSchema.parse(claimed.job);
-      const providerOutput = await this.provider.extract({
+      const providerOutput = await provider.extract({
         profile,
         job,
         extractorVersion: claimed.task.extractorVersion,
         ...(signal ? { signal } : {}),
       });
+      providerAudit = {
+        usage: providerOutput.usage,
+        outputBytes: providerOutput.outputBytes,
+      };
       const extraction = auditExtraction({
-        raw: providerOutput,
+        raw: providerOutput.extraction,
         profile,
         job,
         extractorVersion: claimed.task.extractorVersion,
@@ -316,15 +370,20 @@ export class ScoringCoordinator {
         gate,
         score,
         jobActive: job.active,
-        provider: this.provider.id,
-        model: this.provider.model,
+        provider: provider.id,
+        model: provider.model,
         reviewRequired,
         unknowns,
         explanation,
         rankingAsOf,
+        usage: providerOutput.usage,
+        outputBytes: providerOutput.outputBytes,
         now: this.now(),
       });
-      return reviewRequired ? 'review' : 'succeeded';
+      return {
+        outcome: reviewRequired ? 'review' : 'succeeded',
+        usage: providerOutput.usage,
+      };
     } catch (error) {
       const now = this.now();
       const failure =
@@ -342,6 +401,8 @@ export class ScoringCoordinator {
                       : ('failed' as const),
               outputHash: error.outputHash,
               outputBytes: error.outputBytes,
+              usage: error.usage,
+              retryable: error.code !== 'usage_missing',
             }
           : error instanceof ScoringAuditError
             ? {
@@ -349,26 +410,33 @@ export class ScoringCoordinator {
                 summary: error.message,
                 outcome: 'invalid_output' as const,
                 outputHash: safeHash(error.message),
-                outputBytes: 0,
+                outputBytes: providerAudit?.outputBytes ?? 0,
+                usage: providerAudit?.usage ?? null,
+                retryable: true,
               }
             : {
                 code: 'unexpected',
                 summary: 'Scoring failed unexpectedly and produced no formal score.',
                 outcome: 'failed' as const,
                 outputHash: null,
-                outputBytes: 0,
+                outputBytes: providerAudit?.outputBytes ?? 0,
+                usage: providerAudit?.usage ?? null,
+                retryable: true,
               };
       const task = this.repository.fail(claimed.task.id, {
         ...failure,
-        provider: this.provider.id,
-        model: this.provider.model,
+        provider: provider.id,
+        model: provider.model,
         now,
       });
       this.logger.warn(
         { scoringTaskId: claimed.task.id, errorCode: failure.code, status: task.status },
         'Scoring attempt failed safely',
       );
-      return task.status === 'failed' ? 'failed' : 'pendingRetry';
+      return {
+        outcome: task.status === 'failed' ? 'failed' : 'pendingRetry',
+        usage: failure.usage,
+      };
     }
   }
 }

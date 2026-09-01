@@ -25,6 +25,7 @@ import {
   normalizedJobSchema,
   profileSnapshotSchema,
   scoringBackfillResultSchema,
+  scoringConfigurationSchema,
   scoringProcessResultSchema,
   scoringQueueResponseSchema,
   reviewJobsResponseSchema,
@@ -44,6 +45,14 @@ let app: FastifyInstance;
 let database: DatabaseClient;
 let providerMode: ProviderMode;
 let jobId: string;
+
+const providerUsage = {
+  inputTokens: 1_000,
+  cachedInputTokens: 100,
+  outputTokens: 250,
+  reasoningOutputTokens: 50,
+  totalTokens: 1_250,
+} as const;
 
 function extraction(request: ExtractionRequest): JobExtraction {
   const skillEvidenceId = request.profile.skills[0]!.evidenceId;
@@ -161,9 +170,17 @@ const fakeProvider: AIProvider = {
   async extract(request) {
     const valid = extraction(request);
     if (providerMode === 'gate_override') {
-      return { ...valid, eligible: true } as unknown as JobExtraction;
+      return {
+        extraction: { ...valid, eligible: true } as unknown as JobExtraction,
+        usage: providerUsage,
+        outputBytes: 2_048,
+      };
     }
-    return valid;
+    return {
+      extraction: valid,
+      usage: providerUsage,
+      outputBytes: 2_048,
+    };
   },
 };
 
@@ -252,6 +269,58 @@ beforeEach(async () => {
 afterEach(async () => app.close());
 
 describe('scoring API', () => {
+  it('reports the explicitly selected model', async () => {
+    const configuration = scoringConfigurationSchema.parse(
+      (await app.inject({ method: 'GET', url: '/api/scoring/config' })).json(),
+    );
+    expect(configuration).toEqual({
+      ready: true,
+      provider: 'codex_cli',
+      model: 'fictional-offline-model',
+    });
+  });
+
+  it('starts normally but refuses AI processing when no model was specified', async () => {
+    await app.close();
+    const directory = mkdtempSync(join(tmpdir(), 'job-radar-no-model-api-'));
+    const config = getAppConfig(
+      {
+        NODE_ENV: 'test',
+        JOB_RADAR_DATABASE_PATH: join(directory, 'test.sqlite'),
+        JOB_RADAR_WEB_DIST_DIR: join(directory, 'missing-web-dist'),
+        JOB_RADAR_DATA_DIR: directory,
+        JOB_RADAR_CONFIG_DIR: join(directory, 'config'),
+        JOB_RADAR_LOG_DIR: join(directory, 'logs'),
+      },
+      '/workspace/job-radar',
+    );
+    database = openDatabase(config.databasePath);
+    runMigrations(database);
+    app = await buildApp({ config, database, logger: false });
+
+    expect(
+      scoringConfigurationSchema.parse(
+        (await app.inject({ method: 'GET', url: '/api/scoring/config' })).json(),
+      ),
+    ).toEqual({
+      ready: false,
+      provider: 'codex_cli',
+      model: null,
+    });
+    const process = await app.inject({
+      method: 'POST',
+      url: '/api/scoring/process',
+      payload: { limit: 1 },
+    });
+    expect(process.statusCode).toBe(409);
+    expect(process.json()).toMatchObject({
+      error: { code: 'SCORING_MODEL_NOT_CONFIGURED' },
+    });
+    expect(
+      database.sqlite.prepare('select count(*) as count from scoring_tasks').get(),
+    ).toEqual({ count: 0 });
+  });
+
   it('serves the M4 dashboard, review list/detail, triage, feedback, and review history', async () => {
     await app.inject({ method: 'POST', url: '/api/scoring/backfill', payload: {} });
     await app.inject({
@@ -558,6 +627,7 @@ describe('scoring API', () => {
       review: 0,
       pendingRetry: 0,
       failed: 0,
+      usage: providerUsage,
     });
 
     let history = jobScoringHistorySchema.parse(
@@ -576,6 +646,11 @@ describe('scoring API', () => {
       'TypeScript',
     );
     expect(history.scores).toHaveLength(1);
+    expect(history.attempts[0]).toMatchObject({
+      model: 'fictional-offline-model',
+      outputBytes: 2_048,
+      usage: providerUsage,
+    });
 
     const rescore = await app.inject({
       method: 'POST',

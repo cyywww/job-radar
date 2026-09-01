@@ -18,6 +18,7 @@ import {
   scoreFeedbackSchema,
   scoreReviewEventSchema,
   scoringTaskSchema,
+  scoringConfigurationSchema,
   scoringProcessResultSchema,
   sourceTestResultSchema,
   sourceViewSchema,
@@ -36,6 +37,7 @@ import {
   type ScoreFeedback,
   type ScoreReviewEvent,
   type ScoringTask,
+  type ScoringConfiguration,
   type ScoringProcessResult,
   type SourceTestResult,
   type SourceView,
@@ -216,7 +218,11 @@ export async function retryFailedScoring(): Promise<ScoringTask[]> {
   ).tasks;
 }
 
-export async function processScoringQueue(limit = 10): Promise<ScoringProcessResult> {
+export async function fetchScoringConfiguration(): Promise<ScoringConfiguration> {
+  return scoringConfigurationSchema.parse(await requestJson('/api/scoring/config'));
+}
+
+export async function processScoringQueue(limit = 1): Promise<ScoringProcessResult> {
   return scoringProcessResultSchema.parse(
     await requestJson('/api/scoring/process', {
       method: 'POST',

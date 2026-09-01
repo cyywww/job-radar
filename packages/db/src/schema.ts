@@ -656,6 +656,10 @@ export const scoringAttempts = sqliteTable(
     errorSummary: text('error_summary'),
     outputHash: text('output_hash'),
     outputBytes: integer('output_bytes').notNull().default(0),
+    inputTokens: integer('input_tokens'),
+    cachedInputTokens: integer('cached_input_tokens'),
+    outputTokens: integer('output_tokens'),
+    reasoningOutputTokens: integer('reasoning_output_tokens'),
     startedAt: integer('started_at', { mode: 'timestamp_ms' }).notNull(),
     finishedAt: integer('finished_at', { mode: 'timestamp_ms' }).notNull(),
   },
@@ -664,5 +668,21 @@ export const scoringAttempts = sqliteTable(
     index('scoring_attempts_task_idx').on(table.taskId),
     check('scoring_attempts_number_positive', sql`${table.attemptNumber} > 0`),
     check('scoring_attempts_output_bytes_nonnegative', sql`${table.outputBytes} >= 0`),
+    check(
+      'scoring_attempts_usage_nonnegative',
+      sql`(${table.inputTokens} is null or ${table.inputTokens} >= 0) and (${table.cachedInputTokens} is null or ${table.cachedInputTokens} >= 0) and (${table.outputTokens} is null or ${table.outputTokens} >= 0) and (${table.reasoningOutputTokens} is null or ${table.reasoningOutputTokens} >= 0)`,
+    ),
+    check(
+      'scoring_attempts_usage_complete',
+      sql`(${table.inputTokens} is null and ${table.cachedInputTokens} is null and ${table.outputTokens} is null and ${table.reasoningOutputTokens} is null) or (${table.inputTokens} is not null and ${table.cachedInputTokens} is not null and ${table.outputTokens} is not null and ${table.reasoningOutputTokens} is not null)`,
+    ),
+    check(
+      'scoring_attempts_cached_within_input',
+      sql`${table.cachedInputTokens} is null or ${table.cachedInputTokens} <= ${table.inputTokens}`,
+    ),
+    check(
+      'scoring_attempts_reasoning_within_output',
+      sql`${table.reasoningOutputTokens} is null or ${table.reasoningOutputTokens} <= ${table.outputTokens}`,
+    ),
   ],
 );

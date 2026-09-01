@@ -5,6 +5,7 @@ import { and, asc, desc, eq, inArray, isNull, lte, or, sql } from 'drizzle-orm';
 import {
   jobRequirementSchema,
   jobScoreSchema,
+  scoringAttemptSchema,
   scoringTaskSchema,
   scoringTaskStatusSchema,
   type EligibilityGateResult,
@@ -13,7 +14,9 @@ import {
   type JobRequirement,
   type JobScore,
   type ScoringBackfillResult,
+  type ScoringAttempt,
   type ScoringJobInput,
+  type ScoringTokenUsage,
   type ScoringTask,
   type ScoringTaskStatus,
 } from '@job-radar/shared';
@@ -57,6 +60,8 @@ export interface CompleteScoringInput {
   readonly unknowns: ExtractedUnknown[];
   readonly explanation: string;
   readonly rankingAsOf: Date;
+  readonly usage: ScoringTokenUsage;
+  readonly outputBytes: number;
   readonly now: Date;
 }
 
@@ -68,6 +73,8 @@ export interface ScoringFailureInput {
   readonly model: string;
   readonly outputHash: string | null;
   readonly outputBytes: number;
+  readonly usage: ScoringTokenUsage | null;
+  readonly retryable: boolean;
   readonly now: Date;
 }
 
@@ -494,7 +501,11 @@ export class ScoringRepository {
           outcome: 'succeeded',
           provider: input.provider,
           model: input.model,
-          outputBytes: 0,
+          outputBytes: input.outputBytes,
+          inputTokens: input.usage.inputTokens,
+          cachedInputTokens: input.usage.cachedInputTokens,
+          outputTokens: input.usage.outputTokens,
+          reasoningOutputTokens: input.usage.reasoningOutputTokens,
           startedAt: task.claimedAt ?? input.now,
           finishedAt: input.now,
         })
@@ -548,11 +559,15 @@ export class ScoringRepository {
           errorSummary: input.summary.slice(0, 500),
           outputHash: input.outputHash,
           outputBytes: input.outputBytes,
+          inputTokens: input.usage?.inputTokens ?? null,
+          cachedInputTokens: input.usage?.cachedInputTokens ?? null,
+          outputTokens: input.usage?.outputTokens ?? null,
+          reasoningOutputTokens: input.usage?.reasoningOutputTokens ?? null,
           startedAt: task.claimedAt ?? input.now,
           finishedAt: input.now,
         })
         .run();
-      const exhausted = task.attemptCount >= task.maxAttempts;
+      const exhausted = !input.retryable || task.attemptCount >= task.maxAttempts;
       const delay = Math.min(
         this.options.retryMaxMs,
         this.options.retryBaseMs * 2 ** Math.max(0, task.attemptCount - 1),
@@ -701,6 +716,7 @@ export class ScoringRepository {
     requirements: JobRequirement[];
     scores: JobScore[];
     tasks: ScoringTask[];
+    attempts: ScoringAttempt[];
   } {
     if (
       !this.client.db.select({ id: jobs.id }).from(jobs).where(eq(jobs.id, jobId)).get()
@@ -725,6 +741,13 @@ export class ScoringRepository {
       .where(eq(scoringTasks.jobId, jobId))
       .orderBy(desc(scoringTasks.createdAt), desc(scoringTasks.id))
       .all();
+    const attempts = this.client.db
+      .select({ attempt: scoringAttempts })
+      .from(scoringAttempts)
+      .innerJoin(scoringTasks, eq(scoringAttempts.taskId, scoringTasks.id))
+      .where(eq(scoringTasks.jobId, jobId))
+      .orderBy(desc(scoringAttempts.finishedAt), desc(scoringAttempts.id))
+      .all();
     return {
       current: scoreRows.find(({ invalidatedAt }) => invalidatedAt === null)
         ? this.scoreFromRow(
@@ -734,6 +757,7 @@ export class ScoringRepository {
       requirements: requirementRows.map((row) => this.requirementFromRow(row)),
       scores: scoreRows.map((row) => this.scoreFromRow(row)),
       tasks: tasks.map((row) => this.taskFromRow(row)),
+      attempts: attempts.map(({ attempt }) => this.attemptFromRow(attempt)),
     };
   }
 
@@ -928,6 +952,36 @@ export class ScoringRepository {
       createdAt: row.createdAt.toISOString(),
       updatedAt: row.updatedAt.toISOString(),
       invalidatedAt: date(row.invalidatedAt),
+    });
+  }
+
+  private attemptFromRow(row: typeof scoringAttempts.$inferSelect): ScoringAttempt {
+    const usage =
+      row.inputTokens === null ||
+      row.cachedInputTokens === null ||
+      row.outputTokens === null ||
+      row.reasoningOutputTokens === null
+        ? null
+        : {
+            inputTokens: row.inputTokens,
+            cachedInputTokens: row.cachedInputTokens,
+            outputTokens: row.outputTokens,
+            reasoningOutputTokens: row.reasoningOutputTokens,
+            totalTokens: row.inputTokens + row.outputTokens,
+          };
+    return scoringAttemptSchema.parse({
+      id: row.id,
+      taskId: row.taskId,
+      attemptNumber: row.attemptNumber,
+      outcome: row.outcome,
+      provider: row.provider,
+      model: row.model,
+      errorCode: row.errorCode,
+      errorSummary: row.errorSummary,
+      outputBytes: row.outputBytes,
+      usage,
+      startedAt: row.startedAt.toISOString(),
+      finishedAt: row.finishedAt.toISOString(),
     });
   }
 

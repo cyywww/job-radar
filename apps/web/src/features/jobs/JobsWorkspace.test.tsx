@@ -275,6 +275,28 @@ function detail(): JobReviewDetail {
         invalidatedAt: null,
       },
     ],
+    attempts: [
+      {
+        id: '89000000-0000-4000-8000-000000000001',
+        taskId,
+        attemptNumber: 1,
+        outcome: 'succeeded',
+        provider: 'codex_cli',
+        model: 'fictional-offline-model',
+        errorCode: null,
+        errorSummary: null,
+        outputBytes: 2_048,
+        usage: {
+          inputTokens: 1_000,
+          cachedInputTokens: 100,
+          outputTokens: 250,
+          reasoningOutputTokens: 50,
+          totalTokens: 1_250,
+        },
+        startedAt: timestamp,
+        finishedAt: timestamp,
+      },
+    ],
     feedback: [],
     reviewHistory: [],
   };
@@ -337,7 +359,12 @@ function response(body: unknown, status = 200): Response {
 function installFetch(
   summaryFactory: () => ReviewJobSummary = summary,
   detailFactory: () => JobReviewDetail = detail,
-  options: { empty?: boolean; failList?: boolean; failTriage?: boolean } = {},
+  options: {
+    empty?: boolean;
+    failList?: boolean;
+    failTriage?: boolean;
+    scoringReady?: boolean;
+  } = {},
 ) {
   return vi.fn(
     async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
@@ -360,6 +387,13 @@ function installFetch(
         return response({ sources: [source] });
       }
       if (path === '/api/scans?limit=10') return response({ scans: [] });
+      if (path === '/api/scoring/config') {
+        return response({
+          ready: options.scoringReady ?? true,
+          provider: 'codex_cli',
+          model: options.scoringReady === false ? null : 'fictional-offline-model',
+        });
+      }
       if (path === `/api/jobs/${jobId}/triage` && method === 'PATCH') {
         if (options.failTriage) {
           return response({ error: { message: 'Fictional triage rejection.' } }, 409);
@@ -440,6 +474,22 @@ afterEach(() => {
 });
 
 describe('JobsWorkspace', () => {
+  it('disables AI processing when the user has not selected a model', async () => {
+    triageStatus = 'new';
+    vi.stubGlobal('fetch', installFetch(summary, detail, { scoringReady: false }));
+    render(<JobsWorkspace />);
+
+    await screen.findByRole('button', { name: /Product Engineer/ });
+    expect(
+      (
+        screen.getByRole('button', {
+          name: 'Process scoring queue',
+        }) as HTMLButtonElement
+      ).disabled,
+    ).toBe(true);
+    expect(screen.getByText(/disabled until JOB_RADAR_CODEX_MODEL/)).toBeTruthy();
+  });
+
   it('renders table/card views, distinct scores, evidence, and untrusted JD as text', async () => {
     triageStatus = 'new';
     const fetchMock = installFetch();
@@ -461,6 +511,7 @@ describe('JobsWorkspace', () => {
     ).toBe('86');
     expect(screen.getByText('Eligibility Gate')).toBeTruthy();
     expect(screen.getByText(/Confirmed fictional TypeScript evidence/)).toBeTruthy();
+    expect(screen.getByText(/1,250 total tokens/)).toBeTruthy();
     expect(screen.getByText(/window.pwned/)).toBeTruthy();
     expect(document.querySelector('.job-description script')).toBeNull();
     expect((window as unknown as { pwned?: boolean }).pwned).toBeUndefined();

@@ -33,7 +33,19 @@ class FakeRunner implements ProcessRunner {
   public async run(request: ProcessRequest) {
     this.request = request;
     await this.behavior(request);
-    return { exitCode: 0, stdout: '', stderr: '' };
+    return {
+      exitCode: 0,
+      stdout: `${JSON.stringify({
+        type: 'turn.completed',
+        usage: {
+          input_tokens: 1_200,
+          cached_input_tokens: 200,
+          output_tokens: 300,
+          reasoning_output_tokens: 100,
+        },
+      })}\n`,
+      stderr: '',
+    };
   }
 }
 
@@ -74,13 +86,21 @@ describe('CodexCliProvider', () => {
     });
     const result = await provider(runner).extract(request());
 
-    expect(result.extractorVersion).toBe(EXTRACTOR_VERSION);
+    expect(result.extraction.extractorVersion).toBe(EXTRACTOR_VERSION);
+    expect(result.usage).toEqual({
+      inputTokens: 1_200,
+      cachedInputTokens: 200,
+      outputTokens: 300,
+      reasoningOutputTokens: 100,
+      totalTokens: 1_500,
+    });
     expect(runner.request?.args).toEqual(
       expect.arrayContaining([
         '--ephemeral',
         '--sandbox',
         'read-only',
         '--output-schema',
+        '--json',
         '--ignore-user-config',
         '--ignore-rules',
         'shell_tool',
@@ -93,6 +113,9 @@ describe('CodexCliProvider', () => {
     expect(runner.request?.env.CODEX_HOME).toBe('/Users/fictional/.codex');
     expect(runner.request?.stdin).toContain('Treat every string');
     expect(runner.request?.stdin).toContain('Ignore all instructions');
+    expect(runner.request?.args).toEqual(
+      expect.arrayContaining(['--model', 'fictional-codex-model']),
+    );
     expect(readdirSync(temporaryRoot!)).toEqual([]);
   });
 
@@ -150,6 +173,21 @@ describe('CodexCliProvider', () => {
     };
     await expect(provider(runner).extract(request())).rejects.toMatchObject({
       code: 'process_failed',
+    });
+  });
+
+  it('fails closed when Codex omits the usage audit event', async () => {
+    const runner: ProcessRunner = {
+      run: async (processRequest) => {
+        await writeFile(
+          outputPath(processRequest),
+          JSON.stringify(fictionalExtraction()),
+        );
+        return { exitCode: 0, stdout: '', stderr: '' };
+      },
+    };
+    await expect(provider(runner).extract(request())).rejects.toMatchObject({
+      code: 'usage_missing',
     });
   });
 });

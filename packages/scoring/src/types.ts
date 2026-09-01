@@ -2,6 +2,7 @@ import type {
   ConfirmedProfileView,
   JobExtraction,
   ScoringJobInput,
+  ScoringTokenUsage,
 } from '@job-radar/shared';
 
 export interface ExtractionRequest {
@@ -14,7 +15,13 @@ export interface ExtractionRequest {
 export interface AIProvider {
   readonly id: 'codex_cli';
   readonly model: string;
-  extract(request: ExtractionRequest): Promise<JobExtraction>;
+  extract(request: ExtractionRequest): Promise<ExtractionResult>;
+}
+
+export interface ExtractionResult {
+  readonly extraction: JobExtraction;
+  readonly usage: ScoringTokenUsage;
+  readonly outputBytes: number;
 }
 
 export interface ProcessRequest {

@@ -65,7 +65,8 @@ function mapReviewError(error: unknown): never {
     const statusCode =
       error.code === 'SCORING_JOB_NOT_FOUND' || error.code === 'SCORING_TASK_NOT_FOUND'
         ? 404
-        : error.code === 'SCORING_RUN_ACTIVE'
+        : error.code === 'SCORING_RUN_ACTIVE' ||
+            error.code === 'SCORING_MODEL_NOT_CONFIGURED'
           ? 409
           : 400;
     throw new AppError(error.code, error.message, statusCode);
@@ -159,6 +160,7 @@ export async function registerReviewRoutes(
           : null,
         scoreHistory: history.scores,
         tasks: history.tasks,
+        attempts: history.attempts,
         feedback: review.listFeedback(id),
         reviewHistory: review.listReviewEvents(id),
       });

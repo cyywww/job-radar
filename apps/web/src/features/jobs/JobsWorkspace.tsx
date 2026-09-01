@@ -10,6 +10,7 @@ import {
   type ReviewJobSummary,
   type ReviewJobsQuery,
   type ScanRun,
+  type ScoringConfiguration,
   type SourceView,
   type TriageRecord,
   type TriageStatus,
@@ -22,6 +23,7 @@ import {
   createJobFeedback,
   fetchReviewJob,
   fetchReviewJobs,
+  fetchScoringConfiguration,
   fetchScans,
   fetchSources,
   processScoringQueue,
@@ -144,6 +146,8 @@ export function JobsWorkspace({
   const [total, setTotal] = useState(0);
   const [sources, setSources] = useState<SourceView[]>([]);
   const [runs, setRuns] = useState<ScanRun[]>([]);
+  const [scoringConfiguration, setScoringConfiguration] =
+    useState<ScoringConfiguration | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(initialSelectedId ?? null);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [detail, setDetail] = useState<JobReviewDetail | null>(null);
@@ -170,15 +174,18 @@ export function JobsWorkspace({
     async (quiet = false) => {
       if (!quiet) setLoading(true);
       try {
-        const [result, nextSources, nextRuns] = await Promise.all([
-          fetchReviewJobs(query),
-          fetchSources(true),
-          fetchScans(),
-        ]);
+        const [result, nextSources, nextRuns, nextScoringConfiguration] =
+          await Promise.all([
+            fetchReviewJobs(query),
+            fetchSources(true),
+            fetchScans(),
+            fetchScoringConfiguration(),
+          ]);
         setJobs(result.jobs);
         setTotal(result.total);
         setSources(nextSources);
         setRuns(nextRuns);
+        setScoringConfiguration(nextScoringConfiguration);
         setSelectedId((current) => {
           if (
             initialSelectedId &&
@@ -526,14 +533,14 @@ export function JobsWorkspace({
           <button
             className="button button--quiet"
             type="button"
-            disabled={Boolean(busyAction)}
+            disabled={Boolean(busyAction) || !scoringConfiguration?.ready}
             onClick={() =>
               void runAction(
                 'process',
                 async () => {
                   const result = await processScoringQueue();
                   setNotice(
-                    `Scoring run: ${result.succeeded} succeeded, ${result.review} need review, ${result.failed} failed.`,
+                    `Scoring run: ${result.succeeded} succeeded, ${result.review} need review, ${result.failed} failed; ${result.usage.totalTokens.toLocaleString()} tokens used.`,
                   );
                   await refreshList(true);
                 },
@@ -543,6 +550,11 @@ export function JobsWorkspace({
           >
             Process scoring queue
           </button>
+          <small className="audit-note">
+            {scoringConfiguration?.ready
+              ? `${scoringConfiguration.model} · one job per click · actual usage recorded`
+              : 'Scoring disabled until JOB_RADAR_CODEX_MODEL is configured.'}
+          </small>
         </div>
       </header>
 
@@ -1343,6 +1355,33 @@ function JobDetailPanel({
               </div>
             </dl>
           </>
+        )}
+      </section>
+
+      <section className="score-explanation" aria-labelledby="token-audit-heading">
+        <div className="description-heading">
+          <h3 id="token-audit-heading">AI token audit</h3>
+          <span>Append-only attempts</span>
+        </div>
+        {detail.attempts.length === 0 ? (
+          <p className="audit-note">No AI attempt has been recorded for this job.</p>
+        ) : (
+          <ul className="feedback-history">
+            {detail.attempts.map((attempt) => (
+              <li key={attempt.id}>
+                <strong>
+                  Attempt {attempt.attemptNumber} · {attempt.outcome}
+                </strong>
+                <p>
+                  {attempt.model} ·{' '}
+                  {attempt.usage
+                    ? `${attempt.usage.totalTokens.toLocaleString()} total tokens (${attempt.usage.inputTokens.toLocaleString()} input, ${attempt.usage.outputTokens.toLocaleString()} output, ${attempt.usage.cachedInputTokens.toLocaleString()} cached, ${attempt.usage.reasoningOutputTokens.toLocaleString()} reasoning)`
+                    : 'usage unavailable for this historical/interrupted attempt'}
+                </p>
+                <small>Finished {formatDate(attempt.finishedAt)}</small>
+              </li>
+            ))}
+          </ul>
         )}
       </section>
 

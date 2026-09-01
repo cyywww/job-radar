@@ -203,6 +203,14 @@ const versions = {
   scoringVersion: SCORING_VERSION,
 };
 
+const tokenAudit = {
+  inputTokens: 1_000,
+  cachedInputTokens: 100,
+  outputTokens: 250,
+  reasoningOutputTokens: 50,
+  totalTokens: 1_250,
+} as const;
+
 function completeFixtureScore(
   scoring: ScoringRepository,
   confirmed: ConfirmedProfileView,
@@ -237,6 +245,8 @@ function completeFixtureScore(
     unknowns: [],
     explanation: 'Gate passed with two matches and one explicit gap.',
     rankingAsOf: new Date(claimed.job.fetchedAt),
+    usage: tokenAudit,
+    outputBytes: 2_048,
     now: new Date('2026-09-01T09:01:00.000Z'),
   });
 }
@@ -279,12 +289,18 @@ describe('ScoringRepository', () => {
       unknowns: [],
       explanation: 'Gate passed with two matches and one explicit gap.',
       rankingAsOf: new Date(claimed.job.fetchedAt),
+      usage: tokenAudit,
+      outputBytes: 2_048,
       now: new Date('2026-09-01T09:01:00.000Z'),
     });
     const history = scoring.getJobHistory(ingested.jobId);
     expect(history.current?.matchScore).toBe(score.matchScore);
     expect(history.scores).toHaveLength(1);
     expect(history.tasks[0]?.status).toBe('succeeded');
+    expect(history.attempts[0]).toMatchObject({
+      usage: tokenAudit,
+      outputBytes: 2_048,
+    });
   });
 
   it('keeps rescore double-clicks idempotent and never resets a running claim', () => {
@@ -330,6 +346,8 @@ describe('ScoringRepository', () => {
         model: 'fictional-model',
         outputHash: null,
         outputBytes: 0,
+        usage: null,
+        retryable: true,
         now,
       });
       expect(failed.status).toBe(attempt === 3 ? 'failed' : 'pending');
@@ -425,6 +443,8 @@ describe('ScoringRepository', () => {
       model: 'fictional-model',
       outputHash: 'a'.repeat(64),
       outputBytes: 24,
+      usage: tokenAudit,
+      retryable: true,
       now: new Date('2026-09-01T11:00:01.000Z'),
     });
 

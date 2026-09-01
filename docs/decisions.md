@@ -377,3 +377,13 @@ the stage that failed alongside the existing sanitized error category and retry 
 Existing terminal runs migrate to `complete`. Sources/Runs can therefore explain health,
 configuration state, work counts, retries, and failure location after a refresh or restart
 without retaining response bodies or creating an operational scheduler.
+
+## ADR-045: manual scoring requires an explicit model and auditable token usage
+
+Job Radar may start, scan, and review without AI configuration, but it cannot claim a
+scoring task until the user sets an exact Codex model. Each call requires Codex JSONL usage
+before accepting extracted output. New append-only attempts store actual
+input/cached/output/reasoning counts; cached and reasoning subsets are not double-counted
+in the displayed total. The browser processes one attempt per explicit click. This adapts
+the bounded manual-run lesson from `job-scan` without adding its scheduler or pretending
+Codex has an unsupported hard USD/output-token flag.

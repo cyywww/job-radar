@@ -9,6 +9,8 @@ default suite never starts a real Codex CLI process.
 - Shared contracts cover the exact two source types, strict JobTech Data/IT configuration,
   target-page HTTPS configuration, normalized jobs, run/error states, URL canonicalization,
   identity text, fingerprints, and publication-day keys. Removed source types are rejected.
+  Scoring contracts also validate explicit model readiness, token-count invariants,
+  bounded-run aggregates, and legacy attempts without reconstructed usage.
 - JobTech fixtures cover separate confirmed-role queries, occupation-field filtering,
   paging/completeness, full details, structured occupation/location/language metadata,
   retries, timeout, pacing, cancellation, and detail concurrency.
@@ -47,14 +49,16 @@ default suite never starts a real Codex CLI process.
 - Provider tests use only a fake process. They cover the ephemeral/read-only/schema-bound
   invocation, environment redaction, prompt-injection-shaped JD data, success, nonzero
   exit, timeout, cancellation, invalid JSON, Schema-invalid JSON, final-output bounds, and
-  temporary-directory cleanup.
+  temporary-directory cleanup, explicit model configuration, JSONL usage parsing, and
+  fail-closed missing usage.
 - Scoring audit tests reject added Gate fields, nonexistent evidence, invented snippets,
   missing matches/gaps, unexplained required skills, and version mismatch.
 - Repository/API tests cover idempotent enqueue/backfill, transactional claim/deduplication,
   bounded exponential retry, explicit failed-task recovery, interrupted-task recovery,
   invalid output producing no formal score, Gate non-overridability, forced rescore,
   Profile/snapshot/extractor/scoring/lifecycle invalidation, closure Gate, reopening path,
-  and append-only requirements/scores/attempt history.
+  append-only requirements/scores/attempt history, persisted actual token usage, explicit
+  scoring configuration, and no-model refusal before a task claim.
 - The offline eval runner executes 34 explicit fully fictional cases with expected Gate
   outcome and exact match-score range. Coverage includes language, authorization,
   sponsorship, citizenship, location, remote scope, seniority, evidence depth, soft
@@ -75,8 +79,8 @@ pnpm --filter @job-radar/scoring eval
 `pnpm check` runs lint, typecheck, tests, and build. Formatting remains an explicit
 non-mutating check.
 
-The 2026-09-01 M4 acceptance run passed 161 tests across 30 files: 22 shared, 5
-config, 27 connector, 28 scoring, 30 database, 35 API, and 14 web tests. The separate
+The 2026-09-01 acceptance run passed 168 tests across 31 files: 25 shared, 5 config,
+27 connector, 29 scoring, 30 database, 37 API, and 15 web tests. The separate
 offline eval passed 34/34 cases. `pnpm lint`, formatting, typecheck, tests, build,
 `pnpm check`, diff checks, empty/M2/M3-populated migrations, SQLite integrity/foreign keys,
 and production-style loopback checks passed. No Playwright dependency or unused E2E
@@ -103,6 +107,9 @@ JOB_RADAR_DATABASE_PATH=/tmp/job-radar-migration/example.sqlite pnpm db:migrate
   persisted scan/source stage, and source failure stage. Tests migrate both empty and
   populated M3 databases; exact formal score/version/history values remain unchanged and
   existing terminal runs become `complete`.
+- `0008_melted_purple_man.sql` rebuilds only `scoring_attempts` to add nullable actual-usage
+  columns. The populated M3/M4 fixture proves old attempt byte/model/error/
+  timestamp data survives and new usage fields remain null.
 
 Verify a migrated disposable database with:
 
@@ -135,6 +142,7 @@ curl --fail 'http://127.0.0.1:8787/api/jobs?active=all'
 curl --fail http://127.0.0.1:8787/api/dashboard
 curl --fail 'http://127.0.0.1:8787/api/review/jobs?sort=rankingScore&direction=desc'
 curl --fail 'http://127.0.0.1:8787/api/scoring/queue?limit=1'
+curl --fail http://127.0.0.1:8787/api/scoring/config
 ```
 
 Starting a scan requires a Profile with at least one confirmed target role. Use a

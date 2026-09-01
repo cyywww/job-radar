@@ -468,6 +468,23 @@ describe('database infrastructure', () => {
         )
         .get(sourceRunId),
     ).toEqual({ status: 'succeeded', stage: 'complete', failureStage: null });
+    expect(
+      database.sqlite
+        .prepare(
+          `select output_bytes as outputBytes, input_tokens as inputTokens,
+                  cached_input_tokens as cachedInputTokens,
+                  output_tokens as outputTokens,
+                  reasoning_output_tokens as reasoningOutputTokens
+           from scoring_attempts where id = ?`,
+        )
+        .get(attemptId),
+    ).toEqual({
+      outputBytes: 128,
+      inputTokens: null,
+      cachedInputTokens: null,
+      outputTokens: null,
+      reasoningOutputTokens: null,
+    });
     expect(database.sqlite.pragma('integrity_check', { simple: true })).toBe('ok');
     expect(database.sqlite.pragma('foreign_key_check')).toEqual([]);
   });

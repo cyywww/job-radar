@@ -14,6 +14,7 @@ describe('getAppConfig', () => {
       resolve('/workspace/job-radar', 'data/job-radar.sqlite'),
     );
     expect(config.codexBinary).toBe('codex');
+    expect(config.codexModel).toBeUndefined();
     expect(config.scoringMaxAttempts).toBe(3);
     expect(config.scoringReviewConfidence).toBe(0.65);
   });
