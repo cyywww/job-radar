@@ -180,12 +180,36 @@ export class ScoringCoordinator {
     }
   }
 
+  public rescoreJobs(jobIds: readonly string[]): ScoringTask[] {
+    const profile = this.profiles.getConfirmedView();
+    if (!profile) {
+      throw new ScoringCoordinatorError(
+        'SCORING_PROFILE_NOT_READY',
+        'A confirmed Profile is required before scoring jobs.',
+      );
+    }
+    try {
+      return this.repository.forceRescoreJobs(
+        jobIds,
+        profile.version,
+        versions,
+        this.now(),
+      );
+    } catch (error) {
+      return mapRepositoryError(error);
+    }
+  }
+
   public retry(taskId: string): ScoringTask {
     try {
       return this.repository.retry(taskId, this.now());
     } catch (error) {
       return mapRepositoryError(error);
     }
+  }
+
+  public retryFailed(limit: number): ScoringTask[] {
+    return this.repository.retryFailed(limit, this.now());
   }
 
   public getJobHistory(jobId: string) {

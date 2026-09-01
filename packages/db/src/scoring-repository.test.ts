@@ -339,14 +339,57 @@ describe('ScoringRepository', () => {
       }
     }
     const failedTask = scoring.listTasks('failed', 10)[0]!;
-    expect(scoring.retry(failedTask.id, new Date(now.getTime() + 1)).status).toBe(
-      'pending',
-    );
+    expect(scoring.retryFailed(25, new Date(now.getTime() + 1))).toEqual([
+      expect.objectContaining({ id: failedTask.id, status: 'pending' }),
+    ]);
+    expect(scoring.retryFailed(25, new Date(now.getTime() + 2))).toEqual([]);
     expect(scoring.claimNext(new Date(now.getTime() + 1))?.task.attemptCount).toBe(4);
     const attempts = database!.sqlite
       .prepare('select count(*) as count from scoring_attempts')
       .get() as { count: number };
     expect(attempts.count).toBe(3);
+  });
+
+  it('queues a bounded batch transaction only when every job exists', () => {
+    const { confirmed, scoring, jobs, source, ingested } = setup();
+    const nextScan = jobs.createScan(confirmed.version, [source], ['Platform Engineer']);
+    const second = jobs.ingestJob(
+      source,
+      nextScan.id,
+      normalizedJobSchema.parse({
+        externalId: 'fictional-score-2',
+        title: 'Fictional Platform Engineer',
+        company: 'Fictional Score Works AB',
+        location: 'Stockholm, Sweden',
+        publishedAt: '2026-08-31T08:00:00.000Z',
+        deadline: null,
+        descriptionText: 'Build fictional SQLite and TypeScript systems.',
+        descriptionHtml: null,
+        sourceUrl: 'https://jobs.example.test/fictional-score-2',
+        canonicalUrl: 'https://jobs.example.test/fictional-score-2',
+        remoteMode: 'hybrid',
+        employmentType: 'Full-time',
+        sourceActive: true,
+        sourceMetadata: {},
+        rawData: { fixture: 'scoring-repository-two' },
+      }),
+      new Date('2026-09-01T12:00:00.000Z'),
+    );
+
+    const tasks = scoring.forceRescoreJobs(
+      [ingested.jobId, second.jobId],
+      confirmed.version,
+      versions,
+    );
+    expect(tasks.map(({ status }) => status)).toEqual(['pending', 'pending']);
+    expect(() =>
+      scoring.forceRescoreJobs(
+        [ingested.jobId, '99000000-0000-4000-8000-000000000001'],
+        confirmed.version,
+        versions,
+      ),
+    ).toThrow();
+    expect(scoring.listTasks('pending', 10)).toHaveLength(2);
   });
 
   it('recovers an interrupted running attempt without duplicating its audit record', () => {

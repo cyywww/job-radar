@@ -1,4 +1,4 @@
-# M3 eligibility and scoring
+# M3 eligibility/scoring and M4 review presentation
 
 M3 separates model-assisted extraction from deterministic policy. Codex CLI may extract
 bounded facts and propose evidence links; it cannot decide eligibility, weights, scores,
@@ -82,8 +82,27 @@ at 10. The saved `rankingAsOf`, Profile version, snapshot, extraction, extractor
 and scoring version make a result reproducible.
 
 Confidence below the configured threshold (default 0.65), or any extraction/Gate unknown,
-sets the task to `review` and score review state to `pending`. M3 exposes this state and
-history but intentionally has no M4 review/correction UI.
+sets the task to `review` and score review state to `pending`.
+
+## M4 presentation and human feedback boundary
+
+The review UI reads the current formal score and history; it does not copy Gate or score
+calculation into React. A Gate failure is labeled as an eligibility failure with null
+numeric scores, never as zero. `matchScore` is labeled as evidence fit and
+`rankingScore` as ordering with freshness/target/uncertainty factors. The detail panel
+shows all seven fixed dimensions and weights, Gate machine reasons and readable
+explanations, matched JD/Profile evidence IDs and depth, gaps, unknowns, confidence,
+extractor/scoring/Profile/snapshot/provider/model versions, and `rankingAsOf`.
+
+Low confidence, unknowns, and pending review expose explicit `pending`, `approved`, and
+`rejected` decisions. A decision appends a `score_review_events` row and may update only
+the score's review state. Repeating the same state/reason is idempotent. Correction
+feedback appends a separate `score_feedback` row containing the server-derived original
+formal score, optional human suggested score, type, and required reason. It never rewrites
+match/ranking, breakdown, Gate, versions, Profile evidence, weights, or prior history.
+
+The strong-match threshold is the centralized display constant `80`. It affects Dashboard
+classification only and is not a scoring rule or scoring-version change.
 
 ## Codex CLI provider boundary
 
@@ -141,5 +160,5 @@ The API is an orchestration/query boundary only:
 - `POST /api/jobs/:id/rescore`
 - `GET /api/jobs/:id/scoring`
 
-No scheduler, resident scoring worker, notification, application workflow, or score UI is
-part of M3.
+No scheduler, resident scoring worker, notification, application workflow, or score
+override is part of M4.

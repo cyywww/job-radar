@@ -20,11 +20,17 @@ coverage/
 /config/*
 !/config/.gitkeep
 *.sqlite
-*.sqlite-*
+*.sqlite-shm
+*.sqlite-wal
+*.sqlite-journal
 *.sqlite3
-*.sqlite3-*
+*.sqlite3-shm
+*.sqlite3-wal
+*.sqlite3-journal
 *.db
-*.db-*
+*.db-shm
+*.db-wal
+*.db-journal
 
 # Local imports, backups, and test reports
 /uploads/

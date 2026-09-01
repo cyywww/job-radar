@@ -27,6 +27,7 @@ const migrationFiles = [
   '0004_windy_mongu.sql',
   '0005_sweden_source_cleanup.sql',
   '0006_neat_clea.sql',
+  '0007_bizarre_richard_fisk.sql',
 ] as const;
 
 function copyMigrationsThrough(target: string, lastIndex: number): void {
@@ -84,6 +85,9 @@ describe('database infrastructure', () => {
       'job_requirements',
       'job_scores',
       'scoring_attempts',
+      'job_triage',
+      'score_feedback',
+      'score_review_events',
     ];
     const tables = database.sqlite
       .prepare(
@@ -104,7 +108,9 @@ describe('database infrastructure', () => {
     expect(sourceColumns.map(({ name }) => name)).toEqual(
       expect.arrayContaining(['last_error_category', 'deleted_at']),
     );
-    expect(sourceRunColumns.map(({ name }) => name)).toContain('error_category');
+    expect(sourceRunColumns.map(({ name }) => name)).toEqual(
+      expect.arrayContaining(['error_category', 'stage', 'failure_stage']),
+    );
     expect(jobSourceColumns.map(({ name }) => name)).toContain('source_metadata_json');
     expect(database.sqlite.pragma('integrity_check', { simple: true })).toBe('ok');
     expect(database.sqlite.pragma('foreign_key_check')).toEqual([]);
@@ -214,10 +220,17 @@ describe('database infrastructure', () => {
     );
     const jobs = new JobRepository(database);
     const source = jobs.ensureDefaultSources();
-    const scan = jobs.createScan(profile.version, [source], ['Product Engineer']);
+    const scanId = '80000000-0000-4000-8000-000000000066';
+    const timestamp = Date.parse('2026-09-01T08:00:00.000Z');
+    database.sqlite
+      .prepare(
+        `insert into scan_runs (id, status, profile_version, created_at)
+         values (?, 'succeeded', ?, ?)`,
+      )
+      .run(scanId, profile.version, timestamp);
     const ingested = jobs.ingestJob(
       source,
-      scan.id,
+      scanId,
       normalizedJobSchema.parse({
         externalId: 'fictional-m2-migration-job',
         title: 'Fictional Migration Engineer',
@@ -235,7 +248,7 @@ describe('database infrastructure', () => {
         sourceMetadata: { fixture: true },
         rawData: { fixture: 'm2-migration' },
       }),
-      new Date('2026-09-01T08:00:00.000Z'),
+      new Date(timestamp),
     );
 
     runMigrations(database, getMigrationsFolder());
@@ -257,6 +270,204 @@ describe('database infrastructure', () => {
         )
         .get(),
     ).toEqual({ tasks: 0, requirements: 0, scores: 0, attempts: 0 });
+    expect(database.sqlite.pragma('integrity_check', { simple: true })).toBe('ok');
+    expect(database.sqlite.pragma('foreign_key_check')).toEqual([]);
+  });
+
+  it('adds M4 review state to populated M3 data without rewriting formal scores', () => {
+    const directory = mkdtempSync(join(tmpdir(), 'job-radar-m3-upgrade-'));
+    const m3Migrations = join(directory, 'm3-migrations');
+    copyMigrationsThrough(m3Migrations, 6);
+    database = openDatabase(join(directory, 'm3-upgrade.sqlite'));
+    runMigrations(database, m3Migrations);
+
+    const profile = new ProfileRepository(database).create(
+      createProfileRequestSchema.parse(createFictionalProfileInput()),
+    );
+    const timestamp = Date.parse('2026-08-31T08:00:00.000Z');
+    const sourceId = '70000000-0000-4000-8000-000000000077';
+    const scanId = '80000000-0000-4000-8000-000000000077';
+    const sourceRunId = '81000000-0000-4000-8000-000000000077';
+    const jobId = '90000000-0000-4000-8000-000000000077';
+    const snapshotId = '91000000-0000-4000-8000-000000000077';
+    const taskId = '92000000-0000-4000-8000-000000000077';
+    const requirementId = '93000000-0000-4000-8000-000000000077';
+    const scoreId = '94000000-0000-4000-8000-000000000077';
+    const attemptId = '95000000-0000-4000-8000-000000000077';
+
+    database.sqlite
+      .prepare(
+        `insert into sources
+          (id, type, name, base_url, enabled, config_json, config_version,
+           health_status, created_at, updated_at)
+         values (?, 'jobtech', 'Fictional M3 JobTech',
+           'https://jobsearch.api.jobtechdev.se', 1,
+           '{"occupationField":"apaJ_2ja_LuF","pageSize":100,"maxPages":20}',
+           2, 'healthy', ?, ?)`,
+      )
+      .run(sourceId, timestamp, timestamp);
+    database.sqlite
+      .prepare(
+        `insert into scan_runs
+          (id, status, profile_version, discovered_count, fetched_count, created_count,
+           updated_count, unchanged_count, closed_count, failed_count, started_at,
+           finished_at, created_at)
+         values (?, 'succeeded', ?, 1, 1, 0, 0, 0, 0, 0, ?, ?, ?)`,
+      )
+      .run(scanId, profile.version, timestamp, timestamp, timestamp);
+    database.sqlite
+      .prepare(
+        `insert into source_runs
+          (id, scan_run_id, source_id, status, queries_json, discovered_count,
+           fetched_count, created_count, updated_count, unchanged_count, closed_count,
+           failed_count, result_set_complete, started_at, finished_at, created_at)
+         values (?, ?, ?, 'succeeded', '["Fictional engineer"]', 1, 1, 1, 0, 0,
+           0, 0, 1, ?, ?, ?)`,
+      )
+      .run(sourceRunId, scanId, sourceId, timestamp, timestamp, timestamp);
+    database.sqlite
+      .prepare(
+        `insert into jobs
+          (id, canonical_key, company, title, location, remote_mode, published_at,
+           first_seen_at, last_seen_at, last_changed_at, content_fingerprint,
+           canonical_source_id, active, canonical_url, current_snapshot_id)
+         values (?, 'm3:preserved-score', 'Fictional Preserve Labs AB',
+           'Fictional M3 Engineer', 'Stockholm, Sweden', 'hybrid', ?, ?, ?, ?, ?, ?, 1,
+           'https://jobs.example.test/m3-preserved-score', ?)`,
+      )
+      .run(
+        jobId,
+        timestamp,
+        timestamp,
+        timestamp,
+        timestamp,
+        'd'.repeat(64),
+        sourceId,
+        snapshotId,
+      );
+    database.sqlite
+      .prepare(
+        `insert into job_sources
+          (job_id, source_id, source_job_id, source_url, first_seen_at, last_seen_at,
+           last_seen_scan_run_id, consecutive_misses, active, last_changed_at,
+           match_strategy, match_evidence_json, source_metadata_json)
+         values (?, ?, 'm3-preserved-score',
+           'https://jobs.example.test/m3-preserved-score', ?, ?, ?, 0, 1, ?,
+           'new_job', '{"explanation":"Fictional exact source id"}', '{}')`,
+      )
+      .run(jobId, sourceId, timestamp, timestamp, scanId, timestamp);
+    database.sqlite
+      .prepare(
+        `insert into job_snapshots
+          (id, job_id, content_hash, company, title, location, description_text,
+           raw_json, source_id, scan_run_id, changed_fields_json, fetched_at)
+         values (?, ?, ?, 'Fictional Preserve Labs AB', 'Fictional M3 Engineer',
+           'Stockholm, Sweden', 'A fictional description retained during M4 migration.',
+           '{}', ?, ?, '["initial"]', ?)`,
+      )
+      .run(snapshotId, jobId, 'e'.repeat(64), sourceId, scanId, timestamp);
+    database.sqlite
+      .prepare(
+        `insert into scoring_tasks
+          (id, job_id, snapshot_id, profile_version, extractor_version,
+           scoring_version, status, attempt_count, max_attempts, created_at, updated_at)
+         values (?, ?, ?, ?, 'extractor-v1', 'score-v1', 'succeeded', 1, 3, ?, ?)`,
+      )
+      .run(taskId, jobId, snapshotId, profile.version, timestamp, timestamp);
+    database.sqlite
+      .prepare(
+        `insert into job_requirements
+          (id, task_id, job_id, snapshot_id, profile_version, extractor_version,
+           extraction_json, confidence_micros, provider, model, created_at)
+         values (?, ?, ?, ?, ?, 'extractor-v1',
+           '{"requiredSkills":[],"preferredSkills":[]}', 820000,
+           'fixture', 'fixture-model', ?)`,
+      )
+      .run(requirementId, taskId, jobId, snapshotId, profile.version, timestamp);
+    database.sqlite
+      .prepare(
+        `insert into job_scores
+          (id, task_id, requirement_id, job_id, snapshot_id, profile_version,
+           scoring_version, eligible, job_active, gate_reasons_json, match_score,
+           ranking_score, ranking_factors_json, breakdown_json, matched_evidence_json,
+           gaps_json, unknowns_json, confidence_micros, provider, model, review_state,
+           explanation, ranking_as_of, created_at, updated_at)
+         values (?, ?, ?, ?, ?, ?, 'score-v1', 1, 1, '[]', 84, 81, '{}', '{}',
+           '[]', '[]', '["Fictional uncertainty"]', 820000, 'fixture',
+           'fixture-model', 'pending', 'Fictional deterministic explanation.', ?, ?, ?)`,
+      )
+      .run(
+        scoreId,
+        taskId,
+        requirementId,
+        jobId,
+        snapshotId,
+        profile.version,
+        timestamp,
+        timestamp,
+        timestamp,
+      );
+    database.sqlite
+      .prepare(
+        `insert into scoring_attempts
+          (id, task_id, attempt_number, outcome, provider, model, output_hash,
+           output_bytes, started_at, finished_at)
+         values (?, ?, 1, 'succeeded', 'fixture', 'fixture-model', ?, 128, ?, ?)`,
+      )
+      .run(attemptId, taskId, 'f'.repeat(64), timestamp, timestamp);
+
+    runMigrations(database, getMigrationsFolder());
+
+    expect(
+      database.sqlite
+        .prepare(
+          `select match_score as matchScore, ranking_score as rankingScore,
+                  scoring_version as scoringVersion, review_state as reviewState,
+                  invalidated_at as invalidatedAt
+           from job_scores where id = ?`,
+        )
+        .get(scoreId),
+    ).toEqual({
+      matchScore: 84,
+      rankingScore: 81,
+      scoringVersion: 'score-v1',
+      reviewState: 'pending',
+      invalidatedAt: null,
+    });
+    expect(
+      database.sqlite
+        .prepare(
+          `select
+             (select count(*) from profile_versions) as profiles,
+             (select count(*) from job_snapshots) as snapshots,
+             (select count(*) from job_requirements) as requirements,
+             (select count(*) from scoring_attempts) as attempts,
+             (select count(*) from job_triage) as triage,
+             (select count(*) from score_feedback) as feedback,
+             (select count(*) from score_review_events) as reviewEvents`,
+        )
+        .get(),
+    ).toEqual({
+      profiles: 1,
+      snapshots: 1,
+      requirements: 1,
+      attempts: 1,
+      triage: 0,
+      feedback: 0,
+      reviewEvents: 0,
+    });
+    expect(
+      database.sqlite
+        .prepare('select status, stage from scan_runs where id = ?')
+        .get(scanId),
+    ).toEqual({ status: 'succeeded', stage: 'complete' });
+    expect(
+      database.sqlite
+        .prepare(
+          'select status, stage, failure_stage as failureStage from source_runs where id = ?',
+        )
+        .get(sourceRunId),
+    ).toEqual({ status: 'succeeded', stage: 'complete', failureStage: null });
     expect(database.sqlite.pragma('integrity_check', { simple: true })).toBe('ok');
     expect(database.sqlite.pragma('foreign_key_check')).toEqual([]);
   });

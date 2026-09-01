@@ -20,12 +20,23 @@ default suite never starts a real Codex CLI process.
   configuration upgrade, unsupported-source cleanup, deterministic cross-source matching,
   ambiguous no-merge, merge evidence, source-specific snapshots, changed fields,
   three-miss closure, reopening, partial-failure isolation, configuration versions,
-  duplicate-scan rejection, and history-preserving reprocessing.
+  duplicate-scan rejection, history-preserving reprocessing, sparse triage defaults,
+  idempotent single writes, atomic bulk writes/sparse exact undo, independent formal-score
+  sorting, append-only correction feedback, review-state event history, formal-score
+  isolation, and populated M3-to-M4 preservation.
 - API tests use temporary migrated databases for Profile CRUD, JobTech scans, target-page
   management, health/errors/metrics, source reruns, cancellation, partial source/detail
-  safety, lifecycle, duplicate scan protection, reprocessing, and job audit responses.
-- React tests cover Profile onboarding/versioning, Jobs list/detail/scan, and target-page
-  add/test/edit/pause/enable/delete operations with source health and history rendering.
+  safety, lifecycle, duplicate scan protection, reprocessing, job audit responses,
+  Dashboard, bounded search/filter/sort, detail, triage/restore, bulk rescore, feedback,
+  review isolation, job refresh, persisted run stages/counts, SSE
+  initial/progress/terminal state, disconnect cleanup, terminal reconnect, and SSE data
+  minimization.
+- React tests cover Profile onboarding/versioning; Dashboard metrics/top jobs/actions;
+  Jobs table/card views, filters/sort/save/restore/clear, formal match versus ranking, Gate
+  failure versus zero, evidence/gaps/unknowns/version detail and review history, plain-text
+  hostile JD and non-HTTP link rendering, optimistic triage/exact undo, keyboard focus,
+  bulk actions, human review and suggested-score separation; and target-page
+  add/test/edit/pause/enable/delete operations with source support level/health/history.
 - Scoring Gate table tests cover pass, fail, and unknown outcomes for closure, exclusions,
   authorization/sponsorship/citizenship, location/work mode/remote scope, required
   language, security clearance, and conflicting structured/extracted work modes.
@@ -64,10 +75,13 @@ pnpm --filter @job-radar/scoring eval
 `pnpm check` runs lint, typecheck, tests, and build. Formatting remains an explicit
 non-mutating check.
 
-The 2026-09-01 M3 acceptance run passed 131 tests across 27 files: 15 shared, 5 config,
-27 connector, 28 scoring, 21 database, 30 API, and 5 web tests. The separate offline eval
-run passed 34/34 cases. `pnpm check`, formatting, diff checks, empty/M2-populated
-migrations, and production-style loopback health/readiness checks also passed.
+The 2026-09-01 M4 acceptance run passed 161 tests across 30 files: 22 shared, 5
+config, 27 connector, 28 scoring, 30 database, 35 API, and 14 web tests. The separate
+offline eval passed 34/34 cases. `pnpm lint`, formatting, typecheck, tests, build,
+`pnpm check`, diff checks, empty/M2/M3-populated migrations, SQLite integrity/foreign keys,
+and production-style loopback checks passed. No Playwright dependency or unused E2E
+scaffold was added; the core workflow is covered at repository, API integration, and React
+interaction boundaries.
 
 ## Migration checks
 
@@ -85,6 +99,10 @@ JOB_RADAR_DATABASE_PATH=/tmp/job-radar-migration/example.sqlite pnpm db:migrate
 - `0006_neat_clea.sql` adds the four M3 scoring tables without mutating M2 job, snapshot,
   source, or Profile history. Tests migrate both an empty database and a database already
   migrated through M2 with fictional current job/snapshot data.
+- `0007_bizarre_richard_fisk.sql` adds sparse triage, append-only feedback/review events,
+  persisted scan/source stage, and source failure stage. Tests migrate both empty and
+  populated M3 databases; exact formal score/version/history values remain unchanged and
+  existing terminal runs become `complete`.
 
 Verify a migrated disposable database with:
 
@@ -114,6 +132,8 @@ curl --fail http://127.0.0.1:8787/api/health
 curl --fail http://127.0.0.1:8787/api/readiness
 curl --fail http://127.0.0.1:8787/api/sources
 curl --fail 'http://127.0.0.1:8787/api/jobs?active=all'
+curl --fail http://127.0.0.1:8787/api/dashboard
+curl --fail 'http://127.0.0.1:8787/api/review/jobs?sort=rankingScore&direction=desc'
 curl --fail 'http://127.0.0.1:8787/api/scoring/queue?limit=1'
 ```
 
@@ -130,7 +150,8 @@ that rather than calling fixtures live.
 
 ## Deferred tests
 
-M4 score-presentation/review UI, fuzzy-dedup evals, scheduler integration, large-volume
-performance, backup restore drills, and release automation remain in their owning later
-phases. Restart recovery for M3 scoring task state is already covered without introducing
-a resident scheduler.
+Fuzzy-dedup evals, scheduler/notification integration, application tracking/documents,
+large-volume performance, backup restore drills, additional source adapters, and release
+automation remain in their owning later phases. Restart recovery for M3 scoring state and
+SSE reconnect from durable M4 scan state are covered without introducing a resident
+scheduler.

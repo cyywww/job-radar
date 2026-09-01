@@ -509,6 +509,43 @@ describe('JobRepository multi-source identity', () => {
            values (?, ?, 1, 'succeeded', 'codex_cli', 'fictional-model', 0, ?, ?)`,
         )
         .run(attemptId, taskId, now.getTime(), now.getTime());
+      database.sqlite
+        .prepare(
+          `insert into job_triage (job_id, status, note, updated_at)
+           values (?, ?, ?, ?)`,
+        )
+        .run(
+          job.id,
+          index === 0 ? 'shortlisted' : 'ignored',
+          `Fictional triage ${index + 1}.`,
+          now.getTime() + index,
+        );
+      database.sqlite
+        .prepare(
+          `insert into score_feedback
+            (id, job_id, score_id, type, original_score, suggested_score, reason, created_at)
+           values (?, ?, ?, 'job_specific', null, null, ?, ?)`,
+        )
+        .run(
+          `97000000-0000-4000-8000-${String(index + 1).padStart(12, '0')}`,
+          job.id,
+          scoreId,
+          `Fictional feedback ${index + 1}.`,
+          now.getTime(),
+        );
+      database.sqlite
+        .prepare(
+          `insert into score_review_events
+            (id, job_id, score_id, previous_state, state, reason, created_at)
+           values (?, ?, ?, 'not_required', 'rejected', ?, ?)`,
+        )
+        .run(
+          `98000000-0000-4000-8000-${String(index + 1).padStart(12, '0')}`,
+          job.id,
+          scoreId,
+          `Fictional review event ${index + 1}.`,
+          now.getTime(),
+        );
     }
 
     const result = repository.reprocessJobs(new Date('2026-09-01T12:00:00.000Z'));
@@ -535,10 +572,26 @@ describe('JobRepository multi-source identity', () => {
              (select count(*) from scoring_tasks where job_id = ?) as tasks,
              (select count(*) from job_requirements where job_id = ?) as requirements,
              (select count(*) from job_scores where job_id = ?) as scores,
+             (select count(*) from job_triage where job_id = ?) as triage,
+             (select count(*) from score_feedback where job_id = ?) as feedback,
+             (select count(*) from score_review_events where job_id = ?) as review_events,
              (select count(*) from scoring_attempts) as attempts`,
         )
-        .get(detail.id, detail.id, detail.id),
-    ).toEqual({ tasks: 2, requirements: 2, scores: 2, attempts: 2 });
+        .get(detail.id, detail.id, detail.id, detail.id, detail.id, detail.id),
+    ).toEqual({
+      tasks: 2,
+      requirements: 2,
+      scores: 2,
+      triage: 1,
+      feedback: 2,
+      review_events: 2,
+      attempts: 2,
+    });
+    expect(
+      database.sqlite
+        .prepare('select status, note from job_triage where job_id = ?')
+        .get(detail.id),
+    ).toEqual({ status: 'ignored', note: 'Fictional triage 2.' });
     expect(database.sqlite.pragma('foreign_key_check')).toEqual([]);
     expect(repository.reprocessJobs(new Date('2026-09-02T12:00:00.000Z')).merged).toBe(0);
   });

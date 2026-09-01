@@ -26,6 +26,8 @@ function source(startUrl = 'https://careers.public-example.com/jobs'): Source {
     name: 'Generic JSON-LD fixture',
     baseUrl: startUrl,
     enabled: true,
+    configurationState: 'enabled',
+    deletedAt: null,
     config: genericWebSourceConfigSchema.parse({
       kind: 'generic_web',
       startUrl,

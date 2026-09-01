@@ -310,3 +310,70 @@ rescore, or backfill grants another finite window without deleting attempts, req
 or scores. Snapshot, Profile, extractor, scoring, and lifecycle changes invalidate current
 results and enqueue the matching identity. M3 exposes a bounded process endpoint instead
 of introducing the M5 scheduler or resident worker early.
+
+## ADR-038: triage is sparse state with transactional exact undo
+
+Missing `job_triage` means `new`, so upgrading does not manufacture one row per historical
+job. Single updates return the prior value and skip a same-state write. Bulk updates first
+validate every job and then commit one transaction; exact undo submits the returned prior
+records through another all-or-nothing transaction, preserving the prior timestamp or
+deleting the row when the prior state was implicit `new`. Jobs, snapshots, scores,
+sources, and provenance are never deleted by triage.
+
+## ADR-039: one server read model owns review filtering and ordering
+
+The review list uses one bounded SQL read model with current score/task windowing,
+triage-default projection, source aggregation, and extracted-skill search. Enum-backed
+sort fields map to a fixed column whitelist; text and filter values stay bound parameters.
+The payload contains summaries only, while full descriptions and histories require the
+detail endpoint. Saved filters use a versioned browser-local Zod contract rather than a
+single-user server subsystem.
+
+“Today” starts at local midnight in the API process. The centralized strong-match display
+threshold is 80; it classifies current eligible scores for Dashboard only and cannot alter
+`matchScore`, `scoringVersion`, or ranking.
+
+## ADR-040: human review and correction are separate from formal scores
+
+Review decisions append immutable events with a required explanation and may change only
+the formal record's review-state field. Correction feedback is a separate append-only row
+with server-captured original score, optional human suggestion, type, and reason. Neither
+path rewrites Gate, match/ranking, breakdown, versions, evidence, Profile facts, or
+weights, and neither automatically triggers a policy or Profile change.
+
+## ADR-041: explicit scan SSE is a projection of durable state
+
+The SSE endpoint immediately sends the current database-backed ScanRun, then polls for
+changed stages/counts and stops at a terminal status. Discovery, detail, bounded persist
+batches, and lifecycle updates persist source counts and aggregate ScanRun counts, so a
+reconnect recovers current progress from the database instead of replaying volatile
+process events. Connection-close handlers clear the unreferenced timer. Events contain
+only bounded run/source status and safe error metadata, never descriptions, Profiles,
+headers, tokens, prompts, or raw responses. This does not introduce the M5 scheduler or
+resident process.
+
+## ADR-042: network refresh and historical reprocessing are distinct operations
+
+Job refresh creates an explicit one-source ScanRun and refetches the selected current
+source identity. Source rerun scans one source under its current configuration version.
+Historical reprocessing only reapplies deterministic local identity/normalization to
+stored data. Keeping separate routes, labels, and coordinator methods prevents a local
+reprocess from being presented as fresh upstream confirmation.
+
+## ADR-043: the M4 browser uses native React and safe semantic rendering
+
+The Dashboard, review list, cards, detail sidebar, filters, dialogs/forms, live regions,
+and responsive layouts use the existing React/CSS stack without a table, state, or UI
+framework. The complete posting is rendered only as text in `pre`; source HTML, raw
+metadata, model output, and prompts never enter an executable DOM path. External links
+are emitted only for HTTP(S) URLs and use isolated browsing attributes. Buttons, inputs,
+tables, progress elements, headings, focus transfer, and non-color labels provide the
+keyboard and screen-reader baseline.
+
+## ADR-044: run failure visibility uses persisted bounded stages
+
+ScanRuns and SourceRuns store their current stage; failed or partial SourceRuns also store
+the stage that failed alongside the existing sanitized error category and retry count.
+Existing terminal runs migrate to `complete`. Sources/Runs can therefore explain health,
+configuration state, work counts, retries, and failure location after a refresh or restart
+without retaining response bodies or creating an operational scheduler.

@@ -46,6 +46,7 @@ confirmed Profile roles
   → deterministic identity match
   → source link + immutable material snapshot
   → safe missing/deadline lifecycle
+  → explicit scoring synchronization
   → durable source and aggregate run results
 ```
 
@@ -69,6 +70,12 @@ Only complete discovery with no detail failures may advance missing counters. On
 misses produce `possibly_closed`; the third closes that source link. A job closes only
 when all links are closed. A later sighting resets misses and reopens the link and job.
 
+Each explicit scan persists both aggregate and per-source stage: `queued`, `health`,
+`discovery`, `detail`, `persist`, `lifecycle`, `scoring`, or `complete`. Failed and partial
+SourceRuns also retain a bounded error category and the stage that failed. The browser
+reconstructs current progress from these rows; it does not depend on an in-memory event
+history.
+
 ## Source operations
 
 ```text
@@ -78,10 +85,19 @@ PATCH  /api/sources/:id
 DELETE /api/sources/:id
 POST   /api/sources/:id/test
 POST   /api/sources/:id/rerun
+POST   /api/jobs/:id/refresh
+GET    /api/scans/:id/events
 ```
 
 Target pages start paused. Configuration changes increment `config_version`; each source
 run records the version it used. Soft deletion keeps existing provenance auditable.
+
+A source rerun creates a normal explicit scan for that source. Job refresh instead fetches
+the selected job's current canonical source identity and persists any new material
+snapshot; it is deliberately distinct from deterministic historical job reprocessing.
+The SSE endpoint sends the current persisted scan immediately, then changed stage/count/
+terminal snapshots only. It cleans up on disconnect and stops at a terminal status. It
+contains no descriptions, Profile data, request headers, tokens, or raw responses.
 
 ## Adding another source later
 

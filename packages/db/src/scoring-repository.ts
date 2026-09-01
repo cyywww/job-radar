@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 
-import { and, asc, desc, eq, isNull, lte, or, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, inArray, isNull, lte, or, sql } from 'drizzle-orm';
 
 import {
   jobRequirementSchema,
@@ -222,6 +222,96 @@ export class ScoringRepository {
       }
     });
     return this.findIdentityTask(jobId, job.currentSnapshotId, profileVersion, versions)!;
+  }
+
+  public forceRescoreJobs(
+    jobIds: readonly string[],
+    profileVersion: number,
+    versions: ScoringVersions,
+    now = new Date(),
+  ): ScoringTask[] {
+    const selected = this.client.db
+      .select()
+      .from(jobs)
+      .where(inArray(jobs.id, [...jobIds]))
+      .all();
+    if (
+      selected.length !== jobIds.length ||
+      selected.some((job) => job.currentSnapshotId === null)
+    ) {
+      throw new ScoringRepositoryError(
+        'SCORING_JOB_NOT_FOUND',
+        'One or more jobs or current snapshots do not exist.',
+      );
+    }
+    this.client.db.transaction((transaction) => {
+      for (const job of selected) {
+        transaction
+          .update(jobScores)
+          .set({ invalidatedAt: now, updatedAt: now })
+          .where(and(eq(jobScores.jobId, job.id), isNull(jobScores.invalidatedAt)))
+          .run();
+        transaction
+          .update(jobRequirements)
+          .set({ invalidatedAt: now })
+          .where(
+            and(eq(jobRequirements.jobId, job.id), isNull(jobRequirements.invalidatedAt)),
+          )
+          .run();
+        const existing = transaction
+          .select()
+          .from(scoringTasks)
+          .where(
+            and(
+              eq(scoringTasks.jobId, job.id),
+              eq(scoringTasks.snapshotId, job.currentSnapshotId!),
+              eq(scoringTasks.profileVersion, profileVersion),
+              eq(scoringTasks.extractorVersion, versions.extractorVersion),
+              eq(scoringTasks.scoringVersion, versions.scoringVersion),
+            ),
+          )
+          .get();
+        if (existing) {
+          if (
+            existing.invalidatedAt !== null ||
+            !['pending', 'running'].includes(existing.status)
+          ) {
+            transaction
+              .update(scoringTasks)
+              .set({
+                status: 'pending',
+                maxAttempts: existing.attemptCount + this.options.maxAttempts,
+                retryAt: null,
+                claimedAt: null,
+                lastErrorCode: null,
+                lastErrorSummary: null,
+                updatedAt: now,
+                invalidatedAt: null,
+              })
+              .where(eq(scoringTasks.id, existing.id))
+              .run();
+          }
+        } else {
+          this.insertTask(
+            transaction,
+            job.id,
+            job.currentSnapshotId!,
+            profileVersion,
+            versions,
+            now,
+          );
+        }
+      }
+    });
+    return jobIds.map((jobId) => {
+      const job = selected.find((entry) => entry.id === jobId)!;
+      return this.findIdentityTask(
+        jobId,
+        job.currentSnapshotId!,
+        profileVersion,
+        versions,
+      )!;
+    });
   }
 
   public listTasks(status: ScoringTaskStatus | undefined, limit: number): ScoringTask[] {
@@ -522,6 +612,42 @@ export class ScoringRepository {
         .from(scoringTasks)
         .where(eq(scoringTasks.id, taskId))
         .get()!,
+    );
+  }
+
+  public retryFailed(limit: number, now = new Date()): ScoringTask[] {
+    const failed = this.client.db
+      .select()
+      .from(scoringTasks)
+      .where(and(eq(scoringTasks.status, 'failed'), isNull(scoringTasks.invalidatedAt)))
+      .orderBy(asc(scoringTasks.updatedAt), asc(scoringTasks.id))
+      .limit(limit)
+      .all();
+    this.client.db.transaction((transaction) => {
+      for (const task of failed) {
+        transaction
+          .update(scoringTasks)
+          .set({
+            status: 'pending',
+            maxAttempts: task.attemptCount + this.options.maxAttempts,
+            retryAt: now,
+            claimedAt: null,
+            lastErrorCode: null,
+            lastErrorSummary: null,
+            updatedAt: now,
+          })
+          .where(eq(scoringTasks.id, task.id))
+          .run();
+      }
+    });
+    return failed.map((task) =>
+      this.taskFromRow(
+        this.client.db
+          .select()
+          .from(scoringTasks)
+          .where(eq(scoringTasks.id, task.id))
+          .get()!,
+      ),
     );
   }
 

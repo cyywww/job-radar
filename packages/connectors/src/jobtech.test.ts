@@ -26,6 +26,8 @@ function source(config: Partial<JobTechSourceConfig> = {}): Source {
     name: 'JobTech fixture',
     baseUrl: 'https://jobsearch.api.jobtechdev.se',
     enabled: true,
+    configurationState: 'enabled',
+    deletedAt: null,
     supportLevel: 'supported',
     supportReason: 'Official public fixture.',
     configVersion: 1,

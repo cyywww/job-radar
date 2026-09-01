@@ -8,6 +8,7 @@ import {
   JobTechConnector,
   mapWithConcurrency,
   type ConnectorContext,
+  type DiscoveredJob,
   type JobConnector,
 } from '@job-radar/connectors';
 import {
@@ -39,6 +40,7 @@ export class ScanCoordinatorError extends Error {
       | 'SCAN_ALREADY_RUNNING'
       | 'SCAN_PROFILE_NOT_READY'
       | 'SCAN_SOURCE_NOT_FOUND'
+      | 'SCAN_JOB_NOT_FOUND'
       | 'SCAN_NOT_FOUND'
       | 'SCAN_NOT_CANCELLABLE',
     message: string,
@@ -113,8 +115,8 @@ export class ScanCoordinator {
     this.jobs.ensureDefaultSources(this.now());
   }
 
-  public listSources(): SourceView[] {
-    return this.jobs.listSourceViews();
+  public listSources(includeDeleted = false): SourceView[] {
+    return this.jobs.listSourceViews(includeDeleted);
   }
 
   public createSource(input: CreateSourceRequest): SourceView {
@@ -258,6 +260,55 @@ export class ScanCoordinator {
     return run;
   }
 
+  public startJobRefresh(jobId: string): { scan: ScanRun; jobId: string } {
+    if (this.active) {
+      throw new ScanCoordinatorError(
+        'SCAN_ALREADY_RUNNING',
+        'A scan is already running in this local process',
+      );
+    }
+    const profile = this.profiles.getConfirmedView();
+    if (!profile) {
+      throw new ScanCoordinatorError(
+        'SCAN_PROFILE_NOT_READY',
+        'A confirmed Profile is required before refreshing a job',
+      );
+    }
+    const target = this.jobs.getJobRefreshTarget(jobId);
+    if (!target || !target.source.enabled) {
+      throw new ScanCoordinatorError(
+        'SCAN_JOB_NOT_FOUND',
+        'The job has no enabled current source to refresh',
+      );
+    }
+    let run: ScanRun;
+    try {
+      run = this.jobs.createScan(profile.version, [target.source], [], this.now());
+    } catch (error) {
+      if (error instanceof ScanAlreadyActiveError) {
+        throw new ScanCoordinatorError(
+          'SCAN_ALREADY_RUNNING',
+          'A scan is already queued or running in the local database',
+        );
+      }
+      throw error;
+    }
+    const controller = new AbortController();
+    const promise = this.executeJobRefresh(
+      run.id,
+      target.source,
+      target.externalId,
+      jobId,
+      controller.signal,
+    )
+      .catch(() => undefined)
+      .finally(() => {
+        if (this.active?.runId === run.id) this.active = null;
+      });
+    this.active = { runId: run.id, controller, promise };
+    return { scan: run, jobId };
+  }
+
   public get(runId: string): ScanRun {
     const run = this.jobs.getScan(runId);
     if (!run) throw new ScanCoordinatorError('SCAN_NOT_FOUND', 'Scan run does not exist');
@@ -352,6 +403,8 @@ export class ScanCoordinator {
     const counts = newCounts();
     let pagesFetched = 0;
     let resultSetComplete: boolean | null = null;
+    let failureStage:
+      'health' | 'discovery' | 'detail' | 'persist' | 'lifecycle' | 'scoring' = 'health';
     this.jobs.markSourceRunRunning(runId, source.id, this.now());
     const connector = this.connectors.get(source.type);
 
@@ -372,6 +425,7 @@ export class ScanCoordinator {
         counts,
         errorCategory: 'connector_unavailable',
         errorSummary,
+        failureStage: 'health',
         finishedAt: this.now(),
       });
       return;
@@ -385,6 +439,7 @@ export class ScanCoordinator {
     };
 
     try {
+      this.jobs.markSourceRunStage(runId, source.id, 'health');
       const health = await connector.healthCheck(context);
       if (health.status === 'unavailable') {
         throw new ConnectorRequestError(
@@ -399,11 +454,20 @@ export class ScanCoordinator {
         null,
         this.now(),
       );
+      failureStage = 'discovery';
+      this.jobs.markSourceRunStage(runId, source.id, 'discovery');
       const discovery = await connector.discover(context);
       pagesFetched = discovery.pagesFetched;
       resultSetComplete = discovery.complete;
       counts.discovered = discovery.jobs.length;
+      this.jobs.updateSourceRunProgress(runId, source.id, {
+        counts,
+        pagesFetched,
+        resultSetComplete,
+      });
       const concurrency = source.config.detailConcurrency;
+      failureStage = 'detail';
+      this.jobs.markSourceRunStage(runId, source.id, 'detail');
       const results = await mapWithConcurrency(
         discovery.jobs,
         concurrency,
@@ -414,29 +478,58 @@ export class ScanCoordinator {
         },
       );
 
+      counts.failed = results.filter((result) => result.status === 'rejected').length;
+      counts.fetched = results.length - counts.failed;
+      this.jobs.updateSourceRunProgress(runId, source.id, {
+        counts,
+        pagesFetched,
+        resultSetComplete,
+      });
+
+      failureStage = 'persist';
+      this.jobs.markSourceRunStage(runId, source.id, 'persist');
+      let persisted = 0;
       for (const result of results) {
         if (signal.aborted) throw new ConnectorCancelledError();
-        if (result.status === 'rejected') {
-          counts.failed += 1;
-          continue;
-        }
+        if (result.status === 'rejected') continue;
         const normalized = await result.value;
-        counts.fetched += 1;
         const ingested = this.jobs.ingestJob(source, runId, normalized, this.now());
         counts[ingested.outcome] += 1;
         if (ingested.closed) counts.closed += 1;
+        persisted += 1;
+        if (persisted % 25 === 0) {
+          this.jobs.updateSourceRunProgress(runId, source.id, {
+            counts,
+            pagesFetched,
+            resultSetComplete,
+          });
+        }
         const scoringProfile = this.profiles.getConfirmedView();
         if (scoringProfile) this.scoring?.syncJob(ingested.jobId, scoringProfile.version);
       }
+      this.jobs.updateSourceRunProgress(runId, source.id, {
+        counts,
+        pagesFetched,
+        resultSetComplete,
+      });
 
       const partial = counts.failed > 0;
       const seenIds = new Set(discovery.jobs.map((job) => job.externalId));
+      failureStage = 'lifecycle';
+      this.jobs.markSourceRunStage(runId, source.id, 'lifecycle');
       counts.closed += this.jobs.applyLifecycle(
         source,
         seenIds,
         discovery.complete && !partial,
         this.now(),
       );
+      this.jobs.updateSourceRunProgress(runId, source.id, {
+        counts,
+        pagesFetched,
+        resultSetComplete,
+      });
+      failureStage = 'scoring';
+      this.jobs.markSourceRunStage(runId, source.id, 'scoring');
       const scoringProfile = this.profiles.getConfirmedView();
       if (scoringProfile) this.scoring?.syncAllJobs(scoringProfile.version);
       const errorSummary = partial
@@ -467,6 +560,7 @@ export class ScanCoordinator {
         counts,
         errorCategory: partial ? 'partial_detail' : null,
         errorSummary,
+        failureStage: partial ? 'detail' : null,
         finishedAt: this.now(),
       });
     } catch (error) {
@@ -490,8 +584,140 @@ export class ScanCoordinator {
         counts,
         errorCategory: safe.category,
         errorSummary,
+        failureStage: cancelled ? null : failureStage,
         finishedAt: this.now(),
       });
     }
+  }
+
+  private async executeJobRefresh(
+    runId: string,
+    source: Source,
+    externalId: string,
+    jobId: string,
+    signal: AbortSignal,
+  ): Promise<void> {
+    const counts = newCounts();
+    let failureStage: 'health' | 'discovery' | 'detail' | 'persist' | 'scoring' =
+      'health';
+    this.jobs.markScanRunning(runId, this.now());
+    this.jobs.markSourceRunRunning(runId, source.id, this.now());
+    const connector = this.connectors.get(source.type);
+    if (!connector) {
+      counts.failed = 1;
+      this.jobs.completeSourceRun(runId, source.id, {
+        status: 'failed',
+        resultSetComplete: null,
+        pagesFetched: 0,
+        counts,
+        errorCategory: 'connector_unavailable',
+        errorSummary: 'No connector is registered for this source type',
+        failureStage: 'health',
+        finishedAt: this.now(),
+      });
+      this.jobs.completeScan(runId, this.now());
+      return;
+    }
+    const context: ConnectorContext = {
+      source,
+      queries: [],
+      signal,
+      onRetry: () => this.jobs.incrementSourceRetry(runId, source.id),
+    };
+    try {
+      this.jobs.markSourceRunStage(runId, source.id, 'health');
+      const health = await connector.healthCheck(context);
+      if (health.status === 'unavailable') {
+        throw new ConnectorRequestError(
+          health.message ?? `${source.name} is unavailable`,
+          'connector_unavailable',
+        );
+      }
+      let discovered: DiscoveredJob = { externalId, rawSummary: { id: externalId } };
+      let pagesFetched = 0;
+      if (source.type === 'generic_web') {
+        failureStage = 'discovery';
+        this.jobs.markSourceRunStage(runId, source.id, 'discovery');
+        const discovery = await connector.discover(context);
+        pagesFetched = discovery.pagesFetched;
+        const match = discovery.jobs.find((job) => job.externalId === externalId);
+        if (!match) {
+          throw new ConnectorRequestError(
+            'The selected job is no longer present on its current source page',
+            'not_found',
+          );
+        }
+        discovered = match;
+      }
+      counts.discovered = 1;
+      this.jobs.updateSourceRunProgress(runId, source.id, {
+        counts,
+        pagesFetched,
+        resultSetComplete: null,
+      });
+      failureStage = 'detail';
+      this.jobs.markSourceRunStage(runId, source.id, 'detail');
+      const raw = await connector.fetchDetail(discovered, context);
+      const normalized = await connector.normalize(raw);
+      counts.fetched = 1;
+      this.jobs.updateSourceRunProgress(runId, source.id, {
+        counts,
+        pagesFetched,
+        resultSetComplete: null,
+      });
+      failureStage = 'persist';
+      this.jobs.markSourceRunStage(runId, source.id, 'persist');
+      const ingested = this.jobs.ingestJob(source, runId, normalized, this.now());
+      if (ingested.jobId !== jobId) {
+        throw new ConnectorRequestError(
+          'The refreshed source identity no longer resolves to the selected job',
+          'invalid_response',
+        );
+      }
+      counts[ingested.outcome] += 1;
+      this.jobs.updateSourceRunProgress(runId, source.id, {
+        counts,
+        pagesFetched,
+        resultSetComplete: null,
+      });
+      failureStage = 'scoring';
+      this.jobs.markSourceRunStage(runId, source.id, 'scoring');
+      this.scoring?.syncJob(jobId, this.profiles.getConfirmedView()!.version);
+      this.jobs.updateSourceHealth(source.id, 'healthy', null, null, this.now(), true);
+      this.jobs.completeSourceRun(runId, source.id, {
+        status: 'succeeded',
+        resultSetComplete: null,
+        pagesFetched,
+        counts,
+        errorCategory: null,
+        errorSummary: null,
+        failureStage: null,
+        finishedAt: this.now(),
+      });
+    } catch (error) {
+      const cancelled = signal.aborted || error instanceof ConnectorCancelledError;
+      const safe = cancelled
+        ? { summary: 'Refresh cancelled', category: 'cancelled' as const }
+        : safeError(error);
+      if (!cancelled) counts.failed = 1;
+      this.jobs.updateSourceHealth(
+        source.id,
+        cancelled ? 'degraded' : 'unavailable',
+        safe.summary,
+        safe.category,
+        this.now(),
+      );
+      this.jobs.completeSourceRun(runId, source.id, {
+        status: cancelled ? 'cancelled' : 'failed',
+        resultSetComplete: null,
+        pagesFetched: 0,
+        counts,
+        errorCategory: safe.category,
+        errorSummary: safe.summary,
+        failureStage: cancelled ? null : failureStage,
+        finishedAt: this.now(),
+      });
+    }
+    this.jobs.completeScan(runId, this.now());
   }
 }

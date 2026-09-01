@@ -18,18 +18,25 @@ import {
   type ExtractionRequest,
 } from '@job-radar/scoring';
 import {
+  dashboardResponseSchema,
   jobExtractionSchema,
+  jobReviewDetailSchema,
   jobScoringHistorySchema,
   normalizedJobSchema,
   profileSnapshotSchema,
   scoringBackfillResultSchema,
   scoringProcessResultSchema,
   scoringQueueResponseSchema,
+  reviewJobsResponseSchema,
+  scoreFeedbackSchema,
+  scoreReviewEventSchema,
+  updateTriageResponseSchema,
   type JobExtraction,
 } from '@job-radar/shared';
 import { createFictionalProfileInput } from '@job-radar/testing';
 
 import { buildApp } from './app.js';
+import { getActiveScanEventConnections } from './routes/review.js';
 
 type ProviderMode = 'success' | 'invalid_evidence' | 'gate_override';
 
@@ -245,6 +252,275 @@ beforeEach(async () => {
 afterEach(async () => app.close());
 
 describe('scoring API', () => {
+  it('serves the M4 dashboard, review list/detail, triage, feedback, and review history', async () => {
+    await app.inject({ method: 'POST', url: '/api/scoring/backfill', payload: {} });
+    await app.inject({
+      method: 'POST',
+      url: '/api/scoring/process',
+      payload: { limit: 1 },
+    });
+
+    const dashboard = dashboardResponseSchema.parse(
+      (await app.inject({ method: 'GET', url: '/api/dashboard' })).json(),
+    );
+    expect(dashboard.strongMatchThreshold).toBe(80);
+    expect(dashboard.topJobs[0]).toMatchObject({ id: jobId });
+
+    const list = reviewJobsResponseSchema.parse(
+      (
+        await app.inject({
+          method: 'GET',
+          url: '/api/review/jobs?search=TypeScript&sort=matchScore&direction=desc',
+        })
+      ).json(),
+    );
+    expect(list.total).toBe(1);
+    expect(list.jobs[0]).toMatchObject({
+      id: jobId,
+      triage: { status: 'new', updatedAt: null },
+      score: { state: 'scored', eligible: true },
+    });
+    expect(list.jobs[0]?.score.matchScore).not.toBe(list.jobs[0]?.score.rankingScore);
+
+    const triage = updateTriageResponseSchema.parse(
+      (
+        await app.inject({
+          method: 'PATCH',
+          url: `/api/jobs/${jobId}/triage`,
+          payload: { status: 'shortlisted' },
+        })
+      ).json(),
+    );
+    expect(triage).toMatchObject({
+      previous: { status: 'new' },
+      current: { status: 'shortlisted' },
+    });
+    const sourceId = new JobRepository(database).getJob(jobId)!.sources[0]!.sourceId;
+    const filtered = reviewJobsResponseSchema.parse(
+      (
+        await app.inject({
+          method: 'GET',
+          url:
+            `/api/review/jobs?search=TypeScript&triage=shortlisted` +
+            `&location=Stockholm&remoteMode=hybrid&company=Fictional%20Score` +
+            `&sourceId=${sourceId}&lifecycle=open&gate=passed` +
+            '&scoreStatus=scored&reviewState=not_required&includeClosed=false' +
+            '&sort=rankingScore&direction=desc',
+        })
+      ).json(),
+    );
+    expect(filtered.jobs.map(({ id }) => id)).toEqual([jobId]);
+    const restored = await app.inject({
+      method: 'POST',
+      url: '/api/jobs/bulk-triage/restore',
+      payload: {
+        records: [
+          {
+            jobId: triage.previous.jobId,
+            status: triage.previous.status,
+            note: triage.previous.note,
+            updatedAt: triage.previous.updatedAt,
+          },
+        ],
+      },
+    });
+    expect(restored.statusCode).toBe(200);
+    expect(restored.json()).toMatchObject({ current: [{ status: 'new' }] });
+
+    const feedback = scoreFeedbackSchema.parse(
+      (
+        await app.inject({
+          method: 'POST',
+          url: `/api/jobs/${jobId}/feedback`,
+          payload: {
+            type: 'job_specific',
+            suggestedScore: 61,
+            reason:
+              'The fictional responsibilities need a separate human interpretation.',
+          },
+        })
+      ).json(),
+    );
+    const formalBefore = database.sqlite
+      .prepare('select match_score, ranking_score from job_scores where id = ?')
+      .get(feedback.scoreId) as { match_score: number; ranking_score: number };
+    expect(feedback.originalScore).toBe(formalBefore.match_score);
+    expect(feedback.suggestedScore).toBe(61);
+
+    const reviewEvent = scoreReviewEventSchema.parse(
+      (
+        await app.inject({
+          method: 'PATCH',
+          url: `/api/jobs/${jobId}/review`,
+          payload: {
+            state: 'rejected',
+            reason: 'The fictional extraction should be reviewed without rewriting it.',
+          },
+        })
+      ).json(),
+    );
+    expect(reviewEvent.state).toBe('rejected');
+    expect(
+      database.sqlite
+        .prepare('select match_score, ranking_score from job_scores where id = ?')
+        .get(feedback.scoreId),
+    ).toEqual(formalBefore);
+
+    const detail = jobReviewDetailSchema.parse(
+      (await app.inject({ method: 'GET', url: `/api/review/jobs/${jobId}` })).json(),
+    );
+    expect(detail.currentScore?.reviewState).toBe('rejected');
+    expect(detail.currentRequirement?.extraction.requiredSkills[0]?.name).toBe(
+      'TypeScript',
+    );
+    expect(detail.feedback).toHaveLength(1);
+    expect(detail.reviewHistory).toHaveLength(1);
+    expect(detail.job.snapshot.descriptionText).toContain('Build TypeScript services.');
+  });
+
+  it('validates bulk review operations and emits a persisted terminal SSE state', async () => {
+    const invalidSort = await app.inject({
+      method: 'GET',
+      url: '/api/review/jobs?sort=not-a-column',
+    });
+    expect(invalidSort.statusCode).toBe(400);
+
+    const bulk = await app.inject({
+      method: 'POST',
+      url: '/api/jobs/bulk-triage',
+      payload: { jobIds: [jobId], status: 'ignored' },
+    });
+    expect(bulk.statusCode).toBe(200);
+    expect(bulk.json()).toMatchObject({
+      previous: [{ status: 'new' }],
+      current: [{ status: 'ignored' }],
+    });
+    const duplicate = await app.inject({
+      method: 'POST',
+      url: '/api/jobs/bulk-triage',
+      payload: { jobIds: [jobId, jobId], status: 'archived' },
+    });
+    expect(duplicate.statusCode).toBe(400);
+
+    const rescore = await app.inject({
+      method: 'POST',
+      url: '/api/jobs/bulk-rescore',
+      payload: { jobIds: [jobId] },
+    });
+    expect(rescore.statusCode).toBe(200);
+    expect(rescore.json()).toMatchObject({ tasks: [{ status: 'pending' }] });
+    const rescoredTaskId = (rescore.json() as { tasks: Array<{ id: string }> }).tasks[0]!
+      .id;
+    database.sqlite
+      .prepare(
+        `update scoring_tasks
+         set status = 'failed', attempt_count = max_attempts,
+             last_error_code = 'fixture_failure',
+             last_error_summary = 'Fictional retryable failure.'
+         where id = ?`,
+      )
+      .run(rescoredTaskId);
+    const retried = await app.inject({
+      method: 'POST',
+      url: '/api/scoring/retry-failed',
+      payload: { limit: 25 },
+    });
+    expect(retried.statusCode).toBe(200);
+    expect(retried.json()).toMatchObject({
+      tasks: [{ id: rescoredTaskId, status: 'pending' }],
+    });
+
+    const runId = (
+      database.sqlite
+        .prepare('select id from scan_runs order by created_at desc limit 1')
+        .get() as { id: string }
+    ).id;
+    const events = await app.inject({
+      method: 'GET',
+      url: `/api/scans/${runId}/events`,
+    });
+    expect(events.statusCode).toBe(200);
+    expect(events.headers['content-type']).toContain('text/event-stream');
+    expect(events.payload).toContain('event: scan');
+    expect(events.payload).toContain('"terminal":true');
+    expect(events.payload).not.toContain('Build TypeScript services');
+    expect(getActiveScanEventConnections()).toBe(0);
+
+    const reconnected = await app.inject({
+      method: 'GET',
+      url: `/api/scans/${runId}/events`,
+    });
+    expect(reconnected.payload).toContain('"terminal":true');
+    expect(getActiveScanEventConnections()).toBe(0);
+  });
+
+  it('streams persisted SSE progress, cleans up disconnects, and reconnects to terminal state', async () => {
+    const repository = new JobRepository(database);
+    const source = repository.listSources()[0]!;
+    const startedAt = new Date('2026-09-01T09:00:00.000Z');
+    const run = repository.createScan(1, [source], [], startedAt);
+    repository.markScanRunning(run.id, startedAt);
+    repository.markSourceRunRunning(run.id, source.id, startedAt);
+
+    const controller = new AbortController();
+    const response = await app.inject({
+      method: 'GET',
+      url: `/api/scans/${run.id}/events`,
+      signal: controller.signal,
+      payloadAsStream: true,
+    });
+    expect(response.statusCode).toBe(200);
+    const iterator = response.stream()[Symbol.asyncIterator]();
+    let stream = String((await iterator.next()).value);
+    expect(stream).toContain('"phase":"health"');
+    expect(stream).toContain('"discovered":0');
+    expect(getActiveScanEventConnections()).toBe(1);
+
+    repository.markSourceRunStage(run.id, source.id, 'discovery');
+    const progress = {
+      discovered: 3,
+      fetched: 0,
+      created: 0,
+      updated: 0,
+      unchanged: 0,
+      closed: 0,
+      failed: 0,
+    };
+    repository.updateSourceRunProgress(run.id, source.id, {
+      counts: progress,
+      pagesFetched: 1,
+      resultSetComplete: true,
+    });
+    while (!stream.includes('"phase":"discovery"')) {
+      stream += String((await iterator.next()).value);
+    }
+    expect(stream).toContain('"discovered":3');
+
+    controller.abort();
+    await expect(iterator.next()).rejects.toBeDefined();
+    await expect.poll(() => getActiveScanEventConnections()).toBe(0);
+
+    repository.completeSourceRun(run.id, source.id, {
+      status: 'succeeded',
+      resultSetComplete: true,
+      pagesFetched: 1,
+      counts: progress,
+      errorCategory: null,
+      errorSummary: null,
+      failureStage: null,
+      finishedAt: new Date('2026-09-01T09:01:00.000Z'),
+    });
+    repository.completeScan(run.id, new Date('2026-09-01T09:01:00.000Z'));
+    const terminal = await app.inject({
+      method: 'GET',
+      url: `/api/scans/${run.id}/events`,
+    });
+    const terminalBody = terminal.payload;
+    expect(terminalBody).toContain('"terminal":true');
+    expect(terminalBody).toContain('"discovered":3');
+    expect(getActiveScanEventConnections()).toBe(0);
+  });
+
   it('backfills idempotently, scores once per claim, and preserves rescore history', async () => {
     const firstBackfill = scoringBackfillResultSchema.parse(
       (

@@ -29,16 +29,24 @@ starts the migration-first API and web processes:
 - API: `http://127.0.0.1:8787`
 - Health: `http://127.0.0.1:8787/api/health`
 
-Create and confirm a local Profile with at least one target role. The Sources workspace
-shows JobTech / Platsbanken as the primary source and lets you add selected company career
-pages only when they add useful coverage. Jobs starts enabled sources and displays the
-normalized posting, all source links, merge reasons, lifecycle state, and change history.
+Create and confirm a local Profile with at least one target role. Dashboard then summarizes
+today's additions, strong matches, pending scoring/review, closed jobs, source health, the
+latest run, and the top ten ranked roles. Jobs is the daily review workspace: it provides
+table/card views, bounded search/filter/sort queries, saved browser-local filters, explicit
+score states, full evidence-backed detail, persistent triage with undo, human review and
+separate correction feedback. Sources keeps JobTech / Platsbanken primary and allows only
+selected company career pages as a limited supplement.
 
-M3 scoring is deliberately explicit rather than a resident background service. A scan or
+Scoring remains deliberately explicit rather than a resident background service. A scan or
 Profile edit creates idempotent pending tasks, but Codex CLI extraction runs only when
 `POST /api/scoring/process` is called. Configure an authenticated local Codex CLI only for
 real extraction; default tests use a fake process and never call Codex or the network. See
 `docs/scoring.md` for the full Gate, schema, scoring, retry, and privacy contract.
+
+The Jobs detail panel renders the complete description as untrusted plain text. It never
+injects posting HTML, source metadata, model output, or prompts. `matchScore` remains the M3
+formal evidence-fit score; `rankingScore` is labeled separately and is used only for order.
+Human suggested scores are append-only advisory feedback and never overwrite either score.
 
 Use `Ctrl+C` to stop both processes. `pnpm dev:api` and `pnpm dev:web` run one side during
 focused development.
@@ -100,8 +108,14 @@ Sources and jobs:
 - `PATCH` and `DELETE /api/sources/:id`
 - `POST /api/sources/:id/test` and `POST /api/sources/:id/rerun`
 - `POST /api/scans`, `GET /api/scans`, and `GET /api/scans/:id`
+- `GET /api/scans/:id/events` for durable explicit-scan SSE progress
 - `POST /api/scans/:id/cancel`
 - `GET /api/jobs` and `GET /api/jobs/:id`
+- `GET /api/dashboard`
+- `GET /api/review/jobs` and `GET /api/review/jobs/:id`
+- `PATCH /api/jobs/:id/triage`
+- `POST /api/jobs/bulk-triage` and `POST /api/jobs/bulk-triage/restore`
+- `POST /api/jobs/:id/refresh`
 - `POST /api/jobs/reprocess`
 
 Scoring:
@@ -109,8 +123,15 @@ Scoring:
 - `GET /api/scoring/queue`
 - `POST /api/scoring/backfill` and `POST /api/scoring/process`
 - `POST /api/scoring/tasks/:id/retry`
+- `POST /api/scoring/retry-failed`
 - `POST /api/jobs/:id/rescore`
+- `POST /api/jobs/bulk-rescore`
 - `GET /api/jobs/:id/scoring`
+
+Review and feedback:
+
+- `PATCH /api/jobs/:id/review`
+- `POST /api/jobs/:id/feedback`
 
 All request and response boundaries use shared Zod contracts.
 
@@ -129,6 +150,12 @@ not a compatibility layer.
 Migration `0006_neat_clea.sql` adds append-only job requirements, scores, scoring attempts,
 and an idempotent task queue. It does not rewrite existing M2 jobs or snapshots; an
 explicit backfill creates tasks for their current snapshots.
+
+Migration `0007_bizarre_richard_fisk.sql` adds sparse persistent job triage, append-only
+score feedback and review events, and durable scan/source stages with source failure-stage
+classification. Existing terminal M3 runs are mapped to `complete`; existing Profiles,
+jobs, snapshots, requirements, scores, and attempts are retained without rewriting formal
+score values.
 
 After changing `packages/db/src/schema.ts`, generate and review a migration:
 

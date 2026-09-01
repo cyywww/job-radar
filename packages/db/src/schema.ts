@@ -19,6 +19,8 @@ import type {
   ScoreBreakdown,
   SourceConfig,
   SourceErrorCategory,
+  FeedbackType,
+  TriageStatus,
 } from '@job-radar/shared';
 
 export const systemMetadata = sqliteTable('system_metadata', {
@@ -169,6 +171,20 @@ export const scanRuns = sqliteTable(
     status: text('status', {
       enum: ['queued', 'running', 'succeeded', 'partial', 'failed', 'cancelled'],
     }).notNull(),
+    stage: text('stage', {
+      enum: [
+        'queued',
+        'health',
+        'discovery',
+        'detail',
+        'persist',
+        'lifecycle',
+        'scoring',
+        'complete',
+      ],
+    })
+      .notNull()
+      .default('queued'),
     dedupeKey: text('dedupe_key'),
     profileVersion: integer('profile_version').notNull(),
     discoveredCount: integer('discovered_count').notNull().default(0),
@@ -207,6 +223,23 @@ export const sourceRuns = sqliteTable(
     status: text('status', {
       enum: ['queued', 'running', 'succeeded', 'partial', 'failed', 'cancelled'],
     }).notNull(),
+    stage: text('stage', {
+      enum: [
+        'queued',
+        'health',
+        'discovery',
+        'detail',
+        'persist',
+        'lifecycle',
+        'scoring',
+        'complete',
+      ],
+    })
+      .notNull()
+      .default('queued'),
+    failureStage: text('failure_stage', {
+      enum: ['health', 'discovery', 'detail', 'persist', 'lifecycle', 'scoring'],
+    }),
     configVersion: integer('config_version').notNull().default(1),
     queries: text('queries_json', { mode: 'json' }).$type<string[]>().notNull(),
     resultSetComplete: integer('result_set_complete', { mode: 'boolean' }),
@@ -529,6 +562,80 @@ export const jobScores = sqliteTable(
       'job_scores_confidence_range',
       sql`${table.confidence} >= 0 and ${table.confidence} <= 1000000`,
     ),
+  ],
+);
+
+export const jobTriage = sqliteTable(
+  'job_triage',
+  {
+    jobId: text('job_id')
+      .primaryKey()
+      .references(() => jobs.id, { onDelete: 'restrict' }),
+    status: text('status', {
+      enum: ['new', 'shortlisted', 'ignored', 'archived'],
+    })
+      .$type<TriageStatus>()
+      .notNull(),
+    note: text('note'),
+    updatedAt: integer('updated_at', { mode: 'timestamp_ms' }).notNull(),
+  },
+  (table) => [index('job_triage_status_updated_idx').on(table.status, table.updatedAt)],
+);
+
+export const scoreFeedback = sqliteTable(
+  'score_feedback',
+  {
+    id: text('id').primaryKey(),
+    jobId: text('job_id')
+      .notNull()
+      .references(() => jobs.id, { onDelete: 'restrict' }),
+    scoreId: text('score_id').references(() => jobScores.id, { onDelete: 'restrict' }),
+    type: text('type', {
+      enum: ['job_specific', 'scoring_rule', 'preference', 'profile_correction'],
+    })
+      .$type<FeedbackType>()
+      .notNull(),
+    originalScore: integer('original_score'),
+    suggestedScore: integer('suggested_score'),
+    reason: text('reason').notNull(),
+    createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull(),
+  },
+  (table) => [
+    index('score_feedback_job_created_idx').on(table.jobId, table.createdAt),
+    index('score_feedback_score_idx').on(table.scoreId),
+    check(
+      'score_feedback_original_score_range',
+      sql`${table.originalScore} is null or (${table.originalScore} >= 0 and ${table.originalScore} <= 100)`,
+    ),
+    check(
+      'score_feedback_suggested_score_range',
+      sql`${table.suggestedScore} is null or (${table.suggestedScore} >= 0 and ${table.suggestedScore} <= 100)`,
+    ),
+    check('score_feedback_reason_present', sql`length(trim(${table.reason})) > 0`),
+  ],
+);
+
+export const scoreReviewEvents = sqliteTable(
+  'score_review_events',
+  {
+    id: text('id').primaryKey(),
+    jobId: text('job_id')
+      .notNull()
+      .references(() => jobs.id, { onDelete: 'restrict' }),
+    scoreId: text('score_id')
+      .notNull()
+      .references(() => jobScores.id, { onDelete: 'restrict' }),
+    previousState: text('previous_state', {
+      enum: ['not_required', 'pending', 'approved', 'rejected'],
+    }).notNull(),
+    state: text('state', { enum: ['pending', 'approved', 'rejected'] }).notNull(),
+    reason: text('reason').notNull(),
+    createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull(),
+  },
+  (table) => [
+    index('score_review_events_job_created_idx').on(table.jobId, table.createdAt),
+    index('score_review_events_score_created_idx').on(table.scoreId, table.createdAt),
+    check('score_review_events_reason_present', sql`length(trim(${table.reason})) > 0`),
   ],
 );
 

@@ -34,12 +34,15 @@ import {
 import type { DatabaseClient } from './database.js';
 import {
   jobSnapshots,
+  jobTriage,
   jobMergeEvents,
   jobSources,
   jobRequirements,
   jobScores,
   jobs,
   scanRuns,
+  scoreFeedback,
+  scoreReviewEvents,
   scoringTasks,
   sourceRuns,
   sources,
@@ -110,6 +113,8 @@ function sourceFromRow(row: typeof sources.$inferSelect): Source {
     name: row.name,
     baseUrl: row.baseUrl,
     enabled: row.enabled,
+    configurationState: row.deletedAt ? 'deleted' : row.enabled ? 'enabled' : 'paused',
+    deletedAt: date(row.deletedAt),
     config: row.config,
     supportLevel: capability.supportLevel,
     supportReason: capability.reason,
@@ -153,6 +158,12 @@ export interface IngestResult {
   readonly snapshotId: string;
 }
 
+export interface JobRefreshTarget {
+  readonly jobId: string;
+  readonly externalId: string;
+  readonly source: Source;
+}
+
 export interface CompleteSourceRunInput {
   readonly status: 'succeeded' | 'partial' | 'failed' | 'cancelled';
   readonly resultSetComplete: boolean | null;
@@ -160,6 +171,8 @@ export interface CompleteSourceRunInput {
   readonly counts: RunCounts;
   readonly errorCategory: SourceErrorCategory | null;
   readonly errorSummary: string | null;
+  readonly failureStage?:
+    'health' | 'discovery' | 'detail' | 'persist' | 'lifecycle' | 'scoring' | null;
   readonly finishedAt: Date;
 }
 
@@ -197,11 +210,11 @@ export class JobRepository {
     );
   }
 
-  public listSources(): Source[] {
+  public listSources(includeDeleted = false): Source[] {
     return this.client.db
       .select()
       .from(sources)
-      .where(isNull(sources.deletedAt))
+      .where(includeDeleted ? undefined : isNull(sources.deletedAt))
       .orderBy(sql`case when ${sources.type} = 'jobtech' then 0 else 1 end`, sources.name)
       .all()
       .map(sourceFromRow);
@@ -353,8 +366,8 @@ export class JobRepository {
       .run();
   }
 
-  public listSourceViews(): SourceView[] {
-    return this.listSources().map((source) => this.sourceView(source));
+  public listSourceViews(includeDeleted = false): SourceView[] {
+    return this.listSources(includeDeleted).map((source) => this.sourceView(source));
   }
 
   public getSourceView(sourceId: string): SourceView | null {
@@ -375,6 +388,26 @@ export class JobRepository {
           .where(and(eq(sources.enabled, true), isNull(sources.deletedAt)))
           .all();
     return rows.map(sourceFromRow);
+  }
+
+  public getJobRefreshTarget(jobId: string): JobRefreshTarget | null {
+    const job = this.client.db.select().from(jobs).where(eq(jobs.id, jobId)).get();
+    if (!job) return null;
+    const links = this.client.db
+      .select({ link: jobSources, source: sources })
+      .from(jobSources)
+      .innerJoin(sources, eq(sources.id, jobSources.sourceId))
+      .where(and(eq(jobSources.jobId, jobId), isNull(sources.deletedAt)))
+      .orderBy(desc(jobSources.active), asc(jobSources.firstSeenAt))
+      .all();
+    const selected =
+      links.find(({ source }) => source.id === job.canonicalSourceId) ?? links[0];
+    if (!selected) return null;
+    return {
+      jobId,
+      externalId: selected.link.sourceJobId,
+      source: sourceFromRow(selected.source),
+    };
   }
 
   public updateSourceHealth(
@@ -453,7 +486,18 @@ export class JobRepository {
   public markScanRunning(scanRunId: string, startedAt: Date): void {
     this.client.db
       .update(scanRuns)
-      .set({ status: 'running', startedAt })
+      .set({ status: 'running', stage: 'health', startedAt })
+      .where(eq(scanRuns.id, scanRunId))
+      .run();
+  }
+
+  public markScanStage(
+    scanRunId: string,
+    stage: 'health' | 'discovery' | 'detail' | 'persist' | 'lifecycle' | 'scoring',
+  ): void {
+    this.client.db
+      .update(scanRuns)
+      .set({ stage })
       .where(eq(scanRuns.id, scanRunId))
       .run();
   }
@@ -465,9 +509,22 @@ export class JobRepository {
   ): void {
     this.client.db
       .update(sourceRuns)
-      .set({ status: 'running', startedAt })
+      .set({ status: 'running', stage: 'health', startedAt })
       .where(and(eq(sourceRuns.scanRunId, scanRunId), eq(sourceRuns.sourceId, sourceId)))
       .run();
+  }
+
+  public markSourceRunStage(
+    scanRunId: string,
+    sourceId: string,
+    stage: 'health' | 'discovery' | 'detail' | 'persist' | 'lifecycle' | 'scoring',
+  ): void {
+    this.client.db
+      .update(sourceRuns)
+      .set({ stage })
+      .where(and(eq(sourceRuns.scanRunId, scanRunId), eq(sourceRuns.sourceId, sourceId)))
+      .run();
+    this.markScanStage(scanRunId, stage);
   }
 
   public incrementSourceRetry(scanRunId: string, sourceId: string): void {
@@ -476,6 +533,54 @@ export class JobRepository {
       .set({ retryCount: sql`${sourceRuns.retryCount} + 1` })
       .where(and(eq(sourceRuns.scanRunId, scanRunId), eq(sourceRuns.sourceId, sourceId)))
       .run();
+  }
+
+  public updateSourceRunProgress(
+    scanRunId: string,
+    sourceId: string,
+    progress: {
+      counts: RunCounts;
+      pagesFetched: number;
+      resultSetComplete: boolean | null;
+    },
+  ): void {
+    this.client.db
+      .update(sourceRuns)
+      .set({
+        resultSetComplete: progress.resultSetComplete,
+        pagesFetched: progress.pagesFetched,
+        discoveredCount: progress.counts.discovered,
+        fetchedCount: progress.counts.fetched,
+        createdCount: progress.counts.created,
+        updatedCount: progress.counts.updated,
+        unchangedCount: progress.counts.unchanged,
+        closedCount: progress.counts.closed,
+        failedCount: progress.counts.failed,
+      })
+      .where(and(eq(sourceRuns.scanRunId, scanRunId), eq(sourceRuns.sourceId, sourceId)))
+      .run();
+    this.client.sqlite
+      .prepare(
+        `update scan_runs set
+          discovered_count = (select coalesce(sum(discovered_count), 0) from source_runs where scan_run_id = ?),
+          fetched_count = (select coalesce(sum(fetched_count), 0) from source_runs where scan_run_id = ?),
+          created_count = (select coalesce(sum(created_count), 0) from source_runs where scan_run_id = ?),
+          updated_count = (select coalesce(sum(updated_count), 0) from source_runs where scan_run_id = ?),
+          unchanged_count = (select coalesce(sum(unchanged_count), 0) from source_runs where scan_run_id = ?),
+          closed_count = (select coalesce(sum(closed_count), 0) from source_runs where scan_run_id = ?),
+          failed_count = (select coalesce(sum(failed_count), 0) from source_runs where scan_run_id = ?)
+        where id = ?`,
+      )
+      .run(
+        scanRunId,
+        scanRunId,
+        scanRunId,
+        scanRunId,
+        scanRunId,
+        scanRunId,
+        scanRunId,
+        scanRunId,
+      );
   }
 
   public ingestJob(
@@ -1163,6 +1268,50 @@ export class JobRepository {
             .set({ jobId: keeper.id, invalidatedAt: now, updatedAt: now })
             .where(eq(jobScores.jobId, duplicate.id))
             .run();
+          const keeperTriage = transaction
+            .select()
+            .from(jobTriage)
+            .where(eq(jobTriage.jobId, keeper.id))
+            .get();
+          const duplicateTriage = transaction
+            .select()
+            .from(jobTriage)
+            .where(eq(jobTriage.jobId, duplicate.id))
+            .get();
+          if (duplicateTriage) {
+            const retained =
+              !keeperTriage || duplicateTriage.updatedAt > keeperTriage.updatedAt
+                ? duplicateTriage
+                : keeperTriage;
+            transaction
+              .insert(jobTriage)
+              .values({
+                jobId: keeper.id,
+                status: retained.status,
+                note: retained.note,
+                updatedAt: retained.updatedAt,
+              })
+              .onConflictDoUpdate({
+                target: jobTriage.jobId,
+                set: {
+                  status: retained.status,
+                  note: retained.note,
+                  updatedAt: retained.updatedAt,
+                },
+              })
+              .run();
+            transaction.delete(jobTriage).where(eq(jobTriage.jobId, duplicate.id)).run();
+          }
+          transaction
+            .update(scoreFeedback)
+            .set({ jobId: keeper.id })
+            .where(eq(scoreFeedback.jobId, duplicate.id))
+            .run();
+          transaction
+            .update(scoreReviewEvents)
+            .set({ jobId: keeper.id })
+            .where(eq(scoreReviewEvents.jobId, duplicate.id))
+            .run();
           transaction.delete(jobs).where(eq(jobs.id, duplicate.id)).run();
           merged += 1;
           changed = true;
@@ -1197,6 +1346,8 @@ export class JobRepository {
       .update(sourceRuns)
       .set({
         status: input.status,
+        stage: 'complete',
+        failureStage: input.failureStage ?? null,
         resultSetComplete: input.resultSetComplete,
         pagesFetched: input.pagesFetched,
         discoveredCount: input.counts.discovered,
@@ -1271,6 +1422,7 @@ export class JobRepository {
       .update(scanRuns)
       .set({
         status,
+        stage: 'complete',
         discoveredCount: counts.discovered,
         fetchedCount: counts.fetched,
         createdCount: counts.created,
@@ -1483,6 +1635,8 @@ export class JobRepository {
       sourceName,
       configVersion: run.configVersion,
       status: run.status,
+      stage: run.stage,
+      failureStage: run.failureStage,
       queries: run.queries,
       resultSetComplete: run.resultSetComplete,
       pagesFetched: run.pagesFetched,
@@ -1498,6 +1652,7 @@ export class JobRepository {
     return scanRunSchema.parse({
       id: row.id,
       status: row.status,
+      stage: row.stage,
       profileVersion: row.profileVersion,
       counts: {
         discovered: row.discoveredCount,
@@ -1566,6 +1721,8 @@ export class JobRepository {
             sourceName: source.name,
             configVersion: latest.configVersion,
             status: latest.status,
+            stage: latest.stage,
+            failureStage: latest.failureStage,
             queries: latest.queries,
             resultSetComplete: latest.resultSetComplete,
             pagesFetched: latest.pagesFetched,

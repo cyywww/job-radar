@@ -43,6 +43,8 @@ function jobTechSource(): SourceView {
     name: 'JobTech / Platsbanken',
     baseUrl: 'https://jobsearch.api.jobtechdev.se',
     enabled: true,
+    configurationState: 'enabled',
+    deletedAt: null,
     supportLevel: 'supported',
     supportReason: 'Sweden primary source.',
     configVersion: 1,
@@ -72,6 +74,8 @@ function targetPage(overrides: Partial<SourceView> = {}): SourceView {
     name: 'Northstar careers',
     baseUrl: 'https://careers.example.test/jobs',
     enabled: false,
+    configurationState: 'paused',
+    deletedAt: null,
     supportLevel: 'limited',
     supportReason: 'Optional target-company page.',
     configVersion: 1,
@@ -120,7 +124,8 @@ describe('SourcesWorkspace', () => {
       async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
         const path = input.toString();
         const method = init?.method ?? 'GET';
-        if (path === '/api/sources' && method === 'GET') return response({ sources });
+        if (path === '/api/sources?includeDeleted=true' && method === 'GET')
+          return response({ sources });
         if (path === '/api/sources' && method === 'POST') {
           const body = createSourceRequestSchema.parse(JSON.parse(String(init?.body)));
           const config = targetPage().config;
@@ -171,7 +176,12 @@ describe('SourcesWorkspace', () => {
           return response(sources[1]);
         }
         if (path === `/api/sources/${targetPageId}` && method === 'DELETE') {
-          sources = [sources[0]!];
+          sources[1] = targetPage({
+            ...sources[1],
+            enabled: false,
+            configurationState: 'deleted',
+            deletedAt: timestamp,
+          });
           return response(null, 204);
         }
         return response({ error: { message: `Unexpected ${method} ${path}` } }, 500);
@@ -182,6 +192,7 @@ describe('SourcesWorkspace', () => {
 
     render(<SourcesWorkspace />);
     expect(await screen.findByText('JobTech / Platsbanken')).toBeTruthy();
+    expect(await screen.findByText(/supported · Sweden primary source/)).toBeTruthy();
     await user.type(screen.getByLabelText('Source name'), 'Northstar careers');
     await user.type(screen.getByLabelText('Company name'), 'Northstar Example AB');
     await user.type(
@@ -210,7 +221,11 @@ describe('SourcesWorkspace', () => {
     await user.click(
       screen.getByRole('button', { name: 'Delete Northstar engineering' }),
     );
-    await waitFor(() => expect(screen.queryByText('Northstar engineering')).toBeNull());
+    await waitFor(() => expect(screen.getByText('Northstar engineering')).toBeTruthy());
+    expect(screen.getByText('deleted')).toBeTruthy();
+    expect(
+      screen.queryByRole('button', { name: 'Edit Northstar engineering' }),
+    ).toBeNull();
     expect(screen.getAllByText('JobTech / Platsbanken')).toHaveLength(2);
   });
 });

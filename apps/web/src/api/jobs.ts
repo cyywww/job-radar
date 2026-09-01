@@ -1,19 +1,46 @@
 import {
+  bulkRescoreRequestSchema,
+  bulkRescoreResponseSchema,
+  bulkTriageRequestSchema,
+  bulkTriageResponseSchema,
+  createFeedbackRequestSchema,
   createSourceRequestSchema,
-  jobDetailSchema,
-  jobsResponseSchema,
+  dashboardResponseSchema,
+  jobReviewDetailSchema,
+  refreshJobResponseSchema,
+  retryFailedScoringResponseSchema,
+  reviewJobsQuerySchema,
+  reviewJobsResponseSchema,
+  restoreTriageRequestSchema,
+  restoreTriageResponseSchema,
   scanRunSchema,
   scansResponseSchema,
+  scoreFeedbackSchema,
+  scoreReviewEventSchema,
+  scoringTaskSchema,
+  scoringProcessResultSchema,
   sourceTestResultSchema,
   sourceViewSchema,
   sourcesResponseSchema,
+  updateScoreReviewRequestSchema,
   updateSourceRequestSchema,
+  updateTriageRequestSchema,
+  updateTriageResponseSchema,
+  type CreateFeedbackRequest,
   type CreateSourceRequest,
-  type JobDetail,
-  type JobSummary,
+  type DashboardResponse,
+  type JobReviewDetail,
+  type ReviewJobSummary,
+  type ReviewJobsQuery,
   type ScanRun,
+  type ScoreFeedback,
+  type ScoreReviewEvent,
+  type ScoringTask,
+  type ScoringProcessResult,
   type SourceTestResult,
   type SourceView,
+  type TriageStatus,
+  type TriageRecord,
   type UpdateSourceRequest,
 } from '@job-radar/shared';
 
@@ -48,16 +75,168 @@ async function requestJson(path: string, init: RequestInit = {}): Promise<unknow
   return response.json();
 }
 
-export async function fetchJobs(): Promise<JobSummary[]> {
-  return jobsResponseSchema.parse(await requestJson('/api/jobs?active=all')).jobs;
+export async function fetchReviewJobs(query: ReviewJobsQuery): Promise<{
+  jobs: ReviewJobSummary[];
+  total: number;
+}> {
+  const parsed = reviewJobsQuerySchema.parse({
+    ...query,
+    includeClosed: query.includeClosed ? 'true' : 'false',
+  });
+  const parameters = new URLSearchParams({
+    search: parsed.search,
+    includeClosed: String(parsed.includeClosed),
+    sort: parsed.sort,
+    direction: parsed.direction,
+    limit: String(parsed.limit),
+    offset: String(parsed.offset),
+  });
+  for (const key of [
+    'triage',
+    'location',
+    'remoteMode',
+    'company',
+    'sourceId',
+    'lifecycle',
+    'gate',
+    'scoreStatus',
+    'reviewState',
+  ] as const) {
+    const value = parsed[key];
+    if (value) parameters.set(key, value);
+  }
+  const response = reviewJobsResponseSchema.parse(
+    await requestJson(`/api/review/jobs?${parameters.toString()}`),
+  );
+  return { jobs: response.jobs, total: response.total };
 }
 
-export async function fetchJob(jobId: string): Promise<JobDetail> {
-  return jobDetailSchema.parse(await requestJson(`/api/jobs/${jobId}`));
+export async function fetchDashboard(): Promise<DashboardResponse> {
+  return dashboardResponseSchema.parse(await requestJson('/api/dashboard'));
 }
 
-export async function fetchSources(): Promise<SourceView[]> {
-  return sourcesResponseSchema.parse(await requestJson('/api/sources')).sources;
+export async function fetchReviewJob(jobId: string): Promise<JobReviewDetail> {
+  return jobReviewDetailSchema.parse(await requestJson(`/api/review/jobs/${jobId}`));
+}
+
+export async function updateJobTriage(
+  jobId: string,
+  status: TriageStatus,
+): Promise<ReturnType<typeof updateTriageResponseSchema.parse>> {
+  return updateTriageResponseSchema.parse(
+    await requestJson(`/api/jobs/${jobId}/triage`, {
+      method: 'PATCH',
+      body: JSON.stringify(updateTriageRequestSchema.parse({ status })),
+    }),
+  );
+}
+
+export async function bulkUpdateJobTriage(
+  jobIds: string[],
+  status: TriageStatus,
+): Promise<ReturnType<typeof bulkTriageResponseSchema.parse>> {
+  return bulkTriageResponseSchema.parse(
+    await requestJson('/api/jobs/bulk-triage', {
+      method: 'POST',
+      body: JSON.stringify(bulkTriageRequestSchema.parse({ jobIds, status })),
+    }),
+  );
+}
+
+export async function restoreJobTriage(records: TriageRecord[]): Promise<TriageRecord[]> {
+  return restoreTriageResponseSchema.parse(
+    await requestJson('/api/jobs/bulk-triage/restore', {
+      method: 'POST',
+      body: JSON.stringify(
+        restoreTriageRequestSchema.parse({
+          records: records.map(({ jobId, status, note, updatedAt }) => ({
+            jobId,
+            status,
+            note,
+            updatedAt,
+          })),
+        }),
+      ),
+    }),
+  ).current;
+}
+
+export async function createJobFeedback(
+  jobId: string,
+  input: CreateFeedbackRequest,
+): Promise<ScoreFeedback> {
+  return scoreFeedbackSchema.parse(
+    await requestJson(`/api/jobs/${jobId}/feedback`, {
+      method: 'POST',
+      body: JSON.stringify(createFeedbackRequestSchema.parse(input)),
+    }),
+  );
+}
+
+export async function updateJobReview(
+  jobId: string,
+  state: 'pending' | 'approved' | 'rejected',
+  reason: string,
+): Promise<ScoreReviewEvent> {
+  return scoreReviewEventSchema.parse(
+    await requestJson(`/api/jobs/${jobId}/review`, {
+      method: 'PATCH',
+      body: JSON.stringify(updateScoreReviewRequestSchema.parse({ state, reason })),
+    }),
+  );
+}
+
+export async function rescoreJob(jobId: string): Promise<ScoringTask> {
+  return scoringTaskSchema.parse(
+    await requestJson(`/api/jobs/${jobId}/rescore`, { method: 'POST' }),
+  );
+}
+
+export async function retryScoringTask(taskId: string): Promise<ScoringTask> {
+  return scoringTaskSchema.parse(
+    await requestJson(`/api/scoring/tasks/${taskId}/retry`, { method: 'POST' }),
+  );
+}
+
+export async function bulkRescoreJobs(jobIds: string[]): Promise<ScoringTask[]> {
+  return bulkRescoreResponseSchema.parse(
+    await requestJson('/api/jobs/bulk-rescore', {
+      method: 'POST',
+      body: JSON.stringify(bulkRescoreRequestSchema.parse({ jobIds })),
+    }),
+  ).tasks;
+}
+
+export async function retryFailedScoring(): Promise<ScoringTask[]> {
+  return retryFailedScoringResponseSchema.parse(
+    await requestJson('/api/scoring/retry-failed', {
+      method: 'POST',
+      body: JSON.stringify({ limit: 25 }),
+    }),
+  ).tasks;
+}
+
+export async function processScoringQueue(limit = 10): Promise<ScoringProcessResult> {
+  return scoringProcessResultSchema.parse(
+    await requestJson('/api/scoring/process', {
+      method: 'POST',
+      body: JSON.stringify({ limit }),
+    }),
+  );
+}
+
+export async function refreshJob(jobId: string): Promise<ScanRun> {
+  return refreshJobResponseSchema.parse(
+    await requestJson(`/api/jobs/${jobId}/refresh`, { method: 'POST' }),
+  ).scan;
+}
+
+export async function fetchSources(includeDeleted = false): Promise<SourceView[]> {
+  return sourcesResponseSchema.parse(
+    await requestJson(
+      includeDeleted ? '/api/sources?includeDeleted=true' : '/api/sources',
+    ),
+  ).sources;
 }
 
 export async function createSource(input: CreateSourceRequest): Promise<SourceView> {

@@ -255,6 +255,40 @@ describe('job scan API', () => {
     expect(after.count).toBe(before.count);
   });
 
+  it('refreshes one current source job without running historical reprocessing', async () => {
+    await startScan();
+    const target = database.sqlite
+      .prepare('select job_id as jobId from job_sources where source_job_id = ?')
+      .get('fictional-job-101') as { jobId: string };
+    mode = 'changed';
+    const queuedResponse = await app.inject({
+      method: 'POST',
+      url: `/api/jobs/${target.jobId}/refresh`,
+    });
+    expect(queuedResponse.statusCode).toBe(202);
+    expect(queuedResponse.json()).toMatchObject({
+      jobId: target.jobId,
+      scan: { status: 'queued' },
+    });
+    const completed = await waitForTerminal(
+      (queuedResponse.json() as { scan: { id: string } }).scan.id,
+    );
+    expect(completed).toMatchObject({
+      status: 'succeeded',
+      stage: 'complete',
+      counts: { discovered: 1, fetched: 1, updated: 1, failed: 0 },
+    });
+    expect(completed.sourceRuns[0]).toMatchObject({
+      stage: 'complete',
+      failureStage: null,
+    });
+    expect(
+      database.sqlite
+        .prepare('select count(*) as count from job_snapshots where job_id = ?')
+        .get(target.jobId),
+    ).toMatchObject({ count: 2 });
+  });
+
   it('isolates connector failure, records retries, and keeps the API healthy', async () => {
     mode = 'failure';
     const run = await startScan();
@@ -265,6 +299,8 @@ describe('job scan API', () => {
     expect(run.counts.failed).toBe(1);
     expect(run.sourceRuns[0]).toMatchObject({
       status: 'failed',
+      stage: 'complete',
+      failureStage: 'health',
       retryCount: 1,
       errorSummary: 'JobTech request failed with HTTP 503',
     });
@@ -285,6 +321,7 @@ describe('job scan API', () => {
     expect(run.counts).toMatchObject({ fetched: 2, created: 2, failed: 1 });
     expect(run.sourceRuns[0]).toMatchObject({
       status: 'partial',
+      failureStage: 'detail',
       retryCount: 1,
       errorSummary: '1 discovered job detail failed',
     });

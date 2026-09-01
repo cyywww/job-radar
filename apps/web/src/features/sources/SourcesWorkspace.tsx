@@ -73,7 +73,7 @@ export function SourcesWorkspace(): React.JSX.Element {
   const refresh = useCallback(async () => {
     setLoading(true);
     try {
-      setSources(await fetchSources());
+      setSources(await fetchSources(true));
       setError(null);
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : 'Could not load sources');
@@ -201,9 +201,9 @@ export function SourcesWorkspace(): React.JSX.Element {
     setError(null);
     try {
       await deleteSource(source.id);
-      setSources((current) => current.filter((entry) => entry.id !== source.id));
       if (editingId === source.id) resetForm();
       setNotice('Target page deleted. Historical provenance was retained.');
+      await refresh();
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : 'Could not delete target page');
     } finally {
@@ -233,8 +233,10 @@ export function SourcesWorkspace(): React.JSX.Element {
         </div>
       </header>
 
-      {error ? <p className="alert alert--error">{error}</p> : null}
-      {notice ? <p className="alert alert--success">{notice}</p> : null}
+      <div className="live-message" aria-live="polite" aria-atomic="true">
+        {error ? <p className="alert alert--error">{error}</p> : null}
+        {notice ? <p className="alert alert--success">{notice}</p> : null}
+      </div>
 
       <div className="source-settings-layout">
         <form className="source-form" onSubmit={(event) => void handleSubmit(event)}>
@@ -331,9 +333,16 @@ export function SourcesWorkspace(): React.JSX.Element {
                       ? 'Sweden Data/IT · Platsbanken'
                       : 'Optional target-company page'}
                   </small>
+                  <small>
+                    {source.supportLevel} · {source.supportReason}
+                  </small>
                 </div>
                 <span className={`health-badge health-badge--${source.healthStatus}`}>
-                  {source.enabled ? source.healthStatus : 'paused'}
+                  {source.configurationState === 'deleted'
+                    ? 'deleted'
+                    : source.enabled
+                      ? source.healthStatus
+                      : 'paused'}
                 </span>
               </div>
               <div className="source-metrics">
@@ -355,8 +364,24 @@ export function SourcesWorkspace(): React.JSX.Element {
               </div>
               <div className="source-latest">
                 <span>Last success {formatDate(source.lastSuccessAt)}</span>
-                <span>Latest run {source.latestRun?.status ?? 'not run'}</span>
+                <span>
+                  Latest run {source.latestRun?.status ?? 'not run'}
+                  {source.latestRun?.stage ? ` · ${source.latestRun.stage}` : ''}
+                </span>
               </div>
+              {source.latestRun ? (
+                <p className="source-run-detail">
+                  {source.latestRun.counts.discovered} found ·{' '}
+                  {source.latestRun.counts.fetched} fetched ·{' '}
+                  {source.latestRun.counts.created} new ·{' '}
+                  {source.latestRun.counts.updated} changed ·{' '}
+                  {source.latestRun.counts.failed} failed · {source.latestRun.retryCount}{' '}
+                  retries
+                  {source.latestRun.failureStage
+                    ? ` · failed during ${source.latestRun.failureStage}`
+                    : ''}
+                </p>
+              ) : null}
               {source.lastError ? (
                 <p className="source-friendly-error">
                   {source.lastErrorCategory
@@ -369,7 +394,11 @@ export function SourcesWorkspace(): React.JSX.Element {
                 <button
                   className="button button--secondary"
                   type="button"
-                  disabled={busyId !== null || !source.enabled}
+                  disabled={
+                    busyId !== null ||
+                    !source.enabled ||
+                    source.configurationState === 'deleted'
+                  }
                   aria-label={`Rerun ${source.name}`}
                   onClick={() => void handleRerun(source)}
                 >
@@ -378,7 +407,7 @@ export function SourcesWorkspace(): React.JSX.Element {
                 <button
                   className="button button--quiet"
                   type="button"
-                  disabled={busyId !== null}
+                  disabled={busyId !== null || source.configurationState === 'deleted'}
                   aria-label={`Test ${source.name}`}
                   onClick={() => void handleTest(source)}
                 >
@@ -387,13 +416,14 @@ export function SourcesWorkspace(): React.JSX.Element {
                 <button
                   className="button button--quiet"
                   type="button"
-                  disabled={busyId !== null}
+                  disabled={busyId !== null || source.configurationState === 'deleted'}
                   aria-label={`${source.enabled ? 'Pause' : 'Enable'} ${source.name}`}
                   onClick={() => void handleToggle(source)}
                 >
                   {source.enabled ? 'Pause' : 'Enable'}
                 </button>
-                {source.config.kind === 'generic_web' ? (
+                {source.config.kind === 'generic_web' &&
+                source.configurationState !== 'deleted' ? (
                   <>
                     <button
                       className="button button--quiet"

@@ -5,4 +5,5 @@ export * from './job-identity.js';
 export * from './preferences-preview.js';
 export * from './profile-completeness.js';
 export * from './profile.js';
+export * from './review.js';
 export * from './scoring.js';

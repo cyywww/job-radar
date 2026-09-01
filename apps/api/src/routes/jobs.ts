@@ -22,6 +22,9 @@ import {
 import { ScanCoordinator, ScanCoordinatorError } from '../services/scan-coordinator.js';
 
 const idParamsSchema = z.object({ id: z.string().uuid() }).strict();
+const sourcesQuerySchema = z
+  .object({ includeDeleted: z.enum(['true', 'false']).default('false') })
+  .strict();
 
 function mapCoordinatorError(error: unknown): never {
   if (!(error instanceof ScanCoordinatorError)) throw error;
@@ -52,9 +55,12 @@ export async function registerJobRoutes(
 ): Promise<void> {
   const repository = new JobRepository(database);
 
-  app.get('/api/sources', async () =>
-    sourcesResponseSchema.parse({ sources: coordinator.listSources() }),
-  );
+  app.get('/api/sources', async (request) => {
+    const query = sourcesQuerySchema.parse(request.query);
+    return sourcesResponseSchema.parse({
+      sources: coordinator.listSources(query.includeDeleted === 'true'),
+    });
+  });
 
   app.post('/api/sources', async (request, reply) => {
     try {

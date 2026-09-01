@@ -1,17 +1,26 @@
 import { useState } from 'react';
 
+import { DashboardWorkspace } from './features/dashboard/DashboardWorkspace.js';
 import { JobsWorkspace } from './features/jobs/JobsWorkspace.js';
 import { ProfileWorkspace } from './features/profile/ProfileWorkspace.js';
 import { SourcesWorkspace } from './features/sources/SourcesWorkspace.js';
 import { SystemPanel } from './features/system/SystemPanel.js';
 
 export default function App(): React.JSX.Element {
-  const [view, setView] = useState<'profile' | 'jobs' | 'sources' | 'system'>('profile');
+  const [view, setView] = useState<
+    'dashboard' | 'profile' | 'jobs' | 'sources' | 'system'
+  >('dashboard');
+  const [requestedJobId, setRequestedJobId] = useState<string | undefined>();
+
+  function openJobs(jobId?: string): void {
+    setRequestedJobId(jobId);
+    setView('jobs');
+  }
 
   return (
     <>
       <header className="site-header">
-        <button className="brand" type="button" onClick={() => setView('profile')}>
+        <button className="brand" type="button" onClick={() => setView('dashboard')}>
           <span className="brand__signal" aria-hidden="true">
             <span />
             <span />
@@ -20,6 +29,15 @@ export default function App(): React.JSX.Element {
           <span>Job Radar</span>
         </button>
         <nav aria-label="Primary navigation">
+          <button
+            className={
+              view === 'dashboard' ? 'nav-button nav-button--active' : 'nav-button'
+            }
+            type="button"
+            onClick={() => setView('dashboard')}
+          >
+            Dashboard
+          </button>
           <button
             className={
               view === 'profile' ? 'nav-button nav-button--active' : 'nav-button'
@@ -32,7 +50,7 @@ export default function App(): React.JSX.Element {
           <button
             className={view === 'jobs' ? 'nav-button nav-button--active' : 'nav-button'}
             type="button"
-            onClick={() => setView('jobs')}
+            onClick={() => openJobs()}
           >
             Jobs
           </button>
@@ -53,13 +71,20 @@ export default function App(): React.JSX.Element {
             System
           </button>
         </nav>
-        <span className="phase-label">Sweden JobTech · M2</span>
+        <span className="phase-label">Evidence review · M4</span>
       </header>
       <main>
-        {view === 'profile' ? (
+        {view === 'dashboard' ? (
+          <DashboardWorkspace
+            onOpenJobs={openJobs}
+            onOpenProfile={() => setView('profile')}
+          />
+        ) : view === 'profile' ? (
           <ProfileWorkspace />
         ) : view === 'jobs' ? (
-          <JobsWorkspace />
+          <JobsWorkspace
+            {...(requestedJobId ? { initialSelectedId: requestedJobId } : {})}
+          />
         ) : view === 'sources' ? (
           <SourcesWorkspace />
         ) : (

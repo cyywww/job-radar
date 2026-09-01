@@ -7,7 +7,11 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { getAppConfig } from '@job-radar/config';
 import { openDatabase, runMigrations } from '@job-radar/db';
-import { errorResponseSchema, healthResponseSchema } from '@job-radar/shared';
+import {
+  dashboardResponseSchema,
+  errorResponseSchema,
+  healthResponseSchema,
+} from '@job-radar/shared';
 
 import { buildApp } from './app.js';
 
@@ -58,5 +62,11 @@ describe('operational routes', () => {
 
     expect(response.statusCode).toBe(404);
     expect(payload.error.code).toBe('NOT_FOUND');
+  });
+
+  it('reports the explicit no-Profile Dashboard state', async () => {
+    const response = await app.inject({ method: 'GET', url: '/api/dashboard' });
+    expect(response.statusCode).toBe(200);
+    expect(dashboardResponseSchema.parse(response.json()).profileReady).toBe(false);
   });
 });

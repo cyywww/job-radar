@@ -140,6 +140,7 @@ describe('profile onboarding browser flow', () => {
     const user = userEvent.setup();
     render(<App />);
 
+    await user.click(screen.getByRole('button', { name: 'Profile' }));
     await screen.findByRole('heading', { name: 'Build your trusted profile.' });
     await user.type(screen.getByLabelText('Display name'), 'Robin North');
     await user.type(screen.getByLabelText('Current location'), 'Stockholm');

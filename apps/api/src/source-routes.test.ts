@@ -239,6 +239,18 @@ describe('Sweden-first source API', () => {
       (await app.inject({ method: 'GET', url: '/api/sources' })).json(),
     );
     expect(listed.sources.some((entry) => entry.id === source.id)).toBe(false);
+    const withDeleted = sourcesResponseSchema.parse(
+      (
+        await app.inject({
+          method: 'GET',
+          url: '/api/sources?includeDeleted=true',
+        })
+      ).json(),
+    );
+    expect(withDeleted.sources.find((entry) => entry.id === source.id)).toMatchObject({
+      configurationState: 'deleted',
+      enabled: false,
+    });
   });
 
   it('isolates an optional target-page failure from the primary JobTech scan', async () => {
