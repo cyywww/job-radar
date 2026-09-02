@@ -390,13 +390,13 @@ Codex has an unsupported hard USD/output-token flag.
 
 ## ADR-046: Profile onboarding emphasizes minimum useful input
 
-The browser presents Profile editing as three primary tasks: define the search, describe
-the candidate's fit, and add recent evidence. Required and recommended inputs remain
-visible, while salary/commute preferences, supporting credentials, deterministic import,
-Gate preview, and version/provenance history use native progressive disclosure. Routine
-editing no longer asks the user to choose internal evidence sources or confirmation states;
-direct input is confirmed with the local manual source and imported facts retain the
-existing explicit confirmation action.
+The browser presents Profile editing with one minimal **Quick setup** area: one target role
+is required, target locations are optional, and core skills are recommended. All
+eligibility, language, experience, preference, and supporting-evidence fields share one
+native disclosure. Deterministic import and version/provenance history share a second.
+Routine editing no longer asks the user to choose internal evidence sources or
+confirmation states; direct input is confirmed with the local manual source and imported
+facts retain the existing explicit confirmation action.
 
 This adopts the useful short-profile and separate-preferences lesson from `job-scan`
 without copying its scheduler or AI workflow. The full shared Profile schema, immutable

@@ -1,6 +1,6 @@
 # Implementation status
 
-Last updated: 2026-09-01
+Last updated: 2026-09-02
 
 ## Current milestone
 
@@ -14,12 +14,12 @@ notification, application workflow, application document, or score override.
 
 ## M4 implemented behavior
 
-- Profile uses a focused single-column flow for search intent, matching facts, and recent
-  evidence. Required/recommended labels make the minimum useful inputs explicit; optional
-  filters, supporting credentials, deterministic import, Gate preview, and immutable
-  history use native progressive disclosure. The complete Profile contract and confirmed
-  evidence boundary remain unchanged, while internal source/confirmation metadata is no
-  longer presented as routine form work.
+- Profile starts with a three-input **Quick setup**: target role is required, location is
+  optional, and core skills are recommended. Eligibility, languages, experience,
+  preferences, and supporting credentials share one native disclosure; deterministic
+  import and immutable history share a second. The complete Profile contract and
+  confirmed evidence boundary remain unchanged, while internal source/confirmation
+  metadata is no longer presented as routine form work.
 - Dashboard shows local-day additions, eligible strong matches at the centralized display
   threshold 80, pending scoring, pending review, closed jobs, source health, latest scan,
   top ten ranked jobs, and explicit next actions.
@@ -129,11 +129,11 @@ Verified on 2026-09-01 with Node 22.16 and pnpm 11.19:
 - A second production-style disposable run with no configured model returned ready health,
   readiness, and built-root responses while `/api/scoring/config` reported `ready=false`
   and `model=null`; no Codex process was started.
-- Browser verification covered the simplified Profile onboarding, Dashboard, Jobs,
-  Detail, and Sources/Runs at the desktop viewport and at 390 px. Profile optional groups
-  remained closed until requested, the save/version flow persisted fictional inputs,
-  navigation remained usable, support/stage labels were visible, and the console contained
-  no warnings or errors.
+- Browser verification covered the minimal Profile onboarding, Dashboard, Jobs, Detail,
+  and Sources/Runs at the desktop viewport and at 390 px. Profile creation succeeded from
+  only a fictional target role, advanced fields remained closed until requested, the
+  save/version flow persisted inputs, navigation remained usable, support/stage labels
+  were visible, and the console contained no warnings or errors.
 
 No live JobTech, real Codex CLI, or external source request was made during verification.
 

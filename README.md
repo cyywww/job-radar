@@ -29,12 +29,12 @@ starts the migration-first API and web processes:
 - API: `http://127.0.0.1:8787`
 - Health: `http://127.0.0.1:8787/api/health`
 
-Create a local Profile through three focused sections: search intent, matching facts, and
-recent evidence. Required and recommended inputs are labeled; salary, commute, supporting
-credentials, import, Gate preview, and history stay collapsed until needed. Saving still
-creates an immutable local version, and evidence provenance remains available without
-asking the user to edit internal source metadata. Add at least one target role before a
-scan.
+Create a local Profile from the **Quick setup** form. Only one target role is required;
+target locations are optional and core skills are recommended. Eligibility, languages,
+experience, preferences, supporting credentials, import, and history remain available in
+two collapsed areas when needed. Saving still creates an immutable local version, and
+evidence provenance remains available without asking the user to edit internal source
+metadata.
 
 Dashboard then summarizes today's additions, strong matches, pending scoring/review,
 closed jobs, source health, the latest run, and the top ten ranked roles. Jobs is the daily

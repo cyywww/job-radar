@@ -142,40 +142,26 @@ describe('profile onboarding browser flow', () => {
 
     await user.click(screen.getByRole('button', { name: 'Profile' }));
     await screen.findByRole('heading', { name: 'Your profile' });
-    expect(screen.getByRole('heading', { name: 'Your search' })).toBeTruthy();
-    expect(screen.getByRole('heading', { name: 'Your fit' })).toBeTruthy();
-    expect(screen.getByRole('heading', { name: 'Evidence' })).toBeTruthy();
+    expect(screen.getByRole('heading', { name: 'Quick setup' })).toBeTruthy();
     expect(screen.queryByLabelText('Evidence source')).toBeNull();
+    const advancedDetails = screen
+      .getByText('Add details for better matching')
+      .closest('details');
+    expect(advancedDetails?.hasAttribute('open')).toBe(false);
     expect(
-      screen
-        .getByText('Optional search filters')
-        .closest('details')
-        ?.hasAttribute('open'),
-    ).toBe(false);
-    await user.type(screen.getByLabelText('Display name'), 'Robin North');
-    await user.type(screen.getByLabelText('Current location'), 'Stockholm');
-    await user.type(screen.getByLabelText('Professional summary'), 'Fictional engineer.');
+      advancedDetails?.contains(screen.getByRole('heading', { name: 'Work evidence' })),
+    ).toBe(true);
     await user.type(screen.getByLabelText('Target roles'), 'Product Engineer');
     await user.type(screen.getByLabelText('Target locations'), 'Stockholm');
-    await user.click(screen.getByRole('checkbox', { name: 'hybrid' }));
-    await user.selectOptions(
-      screen.getByLabelText('Work authorization status'),
-      'work_permit',
-    );
-    await user.type(screen.getByLabelText('Authorized countries'), 'Sweden');
     await user.type(screen.getByLabelText('Core skills'), 'TypeScript\nSQL');
     await user.tab();
-    await user.click(screen.getByText('Optional search filters'));
-    await user.type(screen.getByLabelText('Hard exclusions'), 'Unpaid roles');
-    await user.tab();
-    expect(screen.getByText('1 active role lane')).toBeTruthy();
     await user.click(screen.getByRole('button', { name: /^Create profile$/ }));
 
     await screen.findByText(/Saved as version 1/);
     expect(savedRequests[0]).toMatchObject({
-      basics: { data: { displayName: 'Robin North' }, confirmationStatus: 'confirmed' },
+      basics: { data: { displayName: '' }, confirmationStatus: 'confirmed' },
       preferences: {
-        data: { targetRoles: ['Product Engineer'], exclusions: ['Unpaid roles'] },
+        data: { targetRoles: ['Product Engineer'], targetLocations: ['Stockholm'] },
         confirmationStatus: 'confirmed',
       },
       skills: [
@@ -184,6 +170,7 @@ describe('profile onboarding browser flow', () => {
       ],
     });
 
+    await user.click(screen.getByText('Add details for better matching'));
     await user.type(
       screen.getByLabelText('Professional headline'),
       'Fictional product engineer',

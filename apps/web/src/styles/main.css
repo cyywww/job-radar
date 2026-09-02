@@ -570,39 +570,6 @@ p {
   box-shadow: 0 22px 60px rgba(31, 54, 47, 0.055);
 }
 
-.profile-status-strip {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 1px;
-  margin-bottom: 24px;
-  overflow: hidden;
-  border: 1px solid rgba(23, 50, 45, 0.12);
-  border-radius: 18px;
-  background: rgba(23, 50, 45, 0.12);
-}
-
-.profile-status-strip article {
-  display: flex;
-  min-height: 116px;
-  flex-direction: column;
-  justify-content: center;
-  padding: 20px 22px;
-  background: rgba(255, 255, 255, 0.66);
-}
-
-.profile-status-strip span,
-.profile-status-strip small {
-  color: #72817c;
-  font-size: 11px;
-}
-
-.profile-status-strip strong {
-  margin: 5px 0;
-  font-size: 24px;
-  font-weight: 500;
-  letter-spacing: -0.035em;
-}
-
 .profile-import__body {
   display: grid;
   grid-template-columns: minmax(220px, 0.8fr) minmax(300px, 1.2fr);
@@ -610,7 +577,6 @@ p {
 }
 
 .profile-import__body h2,
-.profile-preview-grid h2,
 .profile-history-grid h2 {
   margin-bottom: 10px;
   font-size: 17px;
@@ -623,6 +589,25 @@ p {
   color: #687873;
   font-size: 13px;
   line-height: 1.6;
+}
+
+.profile-tools,
+.editor-stack--advanced {
+  display: grid;
+  gap: 24px;
+}
+
+.profile-tools > .profile-history-grid {
+  padding-top: 24px;
+  border-top: 1px solid rgba(23, 50, 45, 0.1);
+}
+
+.profile-advanced > .editor-stack--advanced {
+  padding-top: 4px;
+}
+
+.profile-advanced .editor-section {
+  box-shadow: none;
 }
 
 .import-actions {
@@ -1032,29 +1017,10 @@ input:disabled {
   font-weight: 600;
 }
 
-.profile-preview-grid,
 .profile-history-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 24px;
-}
-
-.profile-preview-grid ul {
-  margin: 0;
-  padding-left: 18px;
-  color: #657570;
-  font-size: 12px;
-  line-height: 1.6;
-}
-
-.profile-preview-grid p {
-  color: #7a8984;
-  font-size: 12px;
-}
-
-.profile-preview-grid .preview-warnings {
-  grid-column: 1 / -1;
-  margin-top: 0;
 }
 
 .plain-record-list {
@@ -1289,16 +1255,9 @@ footer {
     font-size: clamp(47px, 15vw, 70px);
   }
   .profile-import__body,
-  .profile-preview-grid,
   .profile-history-grid {
     grid-template-columns: 1fr;
     gap: 20px;
-  }
-  .profile-status-strip {
-    grid-template-columns: 1fr;
-  }
-  .profile-status-strip article {
-    min-height: 92px;
   }
   .editor-section {
     padding: 23px;

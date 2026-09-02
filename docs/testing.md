@@ -33,9 +33,10 @@ default suite never starts a real Codex CLI process.
   review isolation, job refresh, persisted run stages/counts, SSE
   initial/progress/terminal state, disconnect cleanup, terminal reconnect, and SSE data
   minimization.
-- React tests cover the focused Profile onboarding/versioning path, required search and fit
-  inputs, quick skill entry, collapsed optional filters, and removal of routine provenance
-  controls; Dashboard metrics/top jobs/actions; Jobs table/card views,
+- React tests cover the minimal Profile onboarding/versioning path, creation from one
+  required target role plus optional location and recommended skills, the single collapsed
+  advanced-details group, and removal of routine provenance controls; Dashboard
+  metrics/top jobs/actions; Jobs table/card views,
   filters/sort/save/restore/clear, formal match versus ranking, Gate failure versus zero,
   evidence/gaps/unknowns/version detail and review history, plain-text hostile JD and
   non-HTTP link rendering, optimistic triage/exact undo, keyboard focus, bulk actions,
@@ -88,8 +89,9 @@ offline eval passed 34/34 cases. `pnpm lint`, formatting, typecheck, tests, buil
 and production-style loopback checks passed. No Playwright dependency or unused E2E
 scaffold was added; the core workflow is covered at repository, API integration, and React
 interaction boundaries. The Profile page was also exercised in the built application at
-desktop and 390 px widths with a disposable database and fictional inputs; optional groups
-stayed collapsed until activated and saving created a durable immutable version.
+desktop and 390 px widths with a disposable database and fictional inputs; only the three
+Quick setup fields were visible, advanced fields stayed collapsed, there was no horizontal
+overflow, and saving with only a target role created a durable immutable version.
 
 ## Migration checks
 

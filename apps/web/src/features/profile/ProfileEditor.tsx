@@ -106,6 +106,37 @@ function EmptyHint({ children }: { children: string }): React.JSX.Element {
   return <p className="empty-hint">{children}</p>;
 }
 
+function updateSkillNames(
+  draft: CreateProfileRequest,
+  onChange: EditorProps['onChange'],
+  names: string[],
+): void {
+  const unchanged =
+    names.length === draft.skills.length &&
+    names.every((name, index) => name === draft.skills[index]?.data.name);
+  if (unchanged) return;
+
+  const manual = ensureManualSource(draft);
+  const existing = new Map(
+    draft.skills.map((fact) => [fact.data.name.toLocaleLowerCase(), fact]),
+  );
+  onChange({
+    ...manual.draft,
+    skills: names.map((name) => {
+      const fact = existing.get(name.toLocaleLowerCase());
+      return fact
+        ? { ...fact, data: { ...fact.data, name } }
+        : {
+            id: newFactId(),
+            sourceId: manual.sourceId,
+            confirmationStatus: 'confirmed' as const,
+            evidenceExcerpt: 'Entered directly in Job Radar',
+            data: { name, level: 'working' as const },
+          };
+    }),
+  });
+}
+
 function SearchSection({ draft, onChange }: EditorProps): React.JSX.Element {
   const preferences = draft.preferences.data;
 
@@ -117,8 +148,8 @@ function SearchSection({ draft, onChange }: EditorProps): React.JSX.Element {
       <SectionHeading
         id="search-profile-heading"
         step="01"
-        title="Your search"
-        description="Only the choices needed to find and gate relevant jobs."
+        title="Quick setup"
+        description="One target role is enough to start. Location and skills make the results more useful."
         state={draft.preferences.confirmationStatus}
       />
       <div className="form-grid form-grid--two">
@@ -142,8 +173,8 @@ function SearchSection({ draft, onChange }: EditorProps): React.JSX.Element {
           label="Target locations"
           value={preferences.targetLocations}
           placeholder={'Stockholm\nRemote within Sweden'}
-          help="Cities, regions, or a clear remote boundary."
-          priority="Required"
+          help="Optional cities, regions, or remote boundary."
+          priority="Optional"
           onChange={(targetLocations) =>
             onChange({
               ...draft,
@@ -154,10 +185,33 @@ function SearchSection({ draft, onChange }: EditorProps): React.JSX.Element {
             })
           }
         />
+        <ListField
+          label="Core skills"
+          value={draft.skills.map((fact) => fact.data.name)}
+          placeholder={'Python\nPostgreSQL\nDocker'}
+          help="Add only skills you have actually used, one per line."
+          priority="Recommended"
+          onChange={(names) => updateSkillNames(draft, onChange, names)}
+        />
+      </div>
+    </section>
+  );
+}
+
+function EligibilitySection({ draft, onChange }: EditorProps): React.JSX.Element {
+  const preferences = draft.preferences.data;
+
+  return (
+    <section className="editor-section" aria-labelledby="eligibility-profile-heading">
+      <SectionHeading
+        id="eligibility-profile-heading"
+        step="03"
+        title="Eligibility and work mode"
+        description="Optional. Add these only when you want Job Radar to decide location, remote, or work-permit Gates."
+      />
+      <div className="form-grid form-grid--two">
         <fieldset className="choice-group form-grid__wide">
-          <legend>
-            Work mode <small>Required</small>
-          </legend>
+          <legend>Work mode</legend>
           {(['onsite', 'hybrid', 'remote'] as const).map((mode) => (
             <label key={mode}>
               <input
@@ -181,9 +235,7 @@ function SearchSection({ draft, onChange }: EditorProps): React.JSX.Element {
           ))}
         </fieldset>
         <label>
-          <span className="field-label">
-            Work authorization <small>Required</small>
-          </span>
+          <span className="field-label">Work authorization</span>
           <span className="field-help">Used only for eligibility checks.</span>
           <select
             aria-label="Work authorization status"
@@ -259,33 +311,6 @@ function SearchSection({ draft, onChange }: EditorProps): React.JSX.Element {
 }
 
 function FitSection({ draft, onChange }: EditorProps): React.JSX.Element {
-  const updateSkills = (names: string[]) => {
-    const unchanged =
-      names.length === draft.skills.length &&
-      names.every((name, index) => name === draft.skills[index]?.data.name);
-    if (unchanged) return;
-
-    const manual = ensureManualSource(draft);
-    const existing = new Map(
-      draft.skills.map((fact) => [fact.data.name.toLocaleLowerCase(), fact]),
-    );
-    onChange({
-      ...manual.draft,
-      skills: names.map((name) => {
-        const fact = existing.get(name.toLocaleLowerCase());
-        return fact
-          ? { ...fact, data: { ...fact.data, name } }
-          : {
-              id: newFactId(),
-              sourceId: manual.sourceId,
-              confirmationStatus: 'confirmed' as const,
-              evidenceExcerpt: 'Entered directly in Job Radar',
-              data: { name, level: 'working' as const },
-            };
-      }),
-    });
-  };
-
   const addLanguage = () => {
     const manual = ensureManualSource(draft);
     onChange({
@@ -308,14 +333,14 @@ function FitSection({ draft, onChange }: EditorProps): React.JSX.Element {
       <SectionHeading
         id="candidate-profile-heading"
         step="02"
-        title="Your fit"
-        description="A short factual summary plus the skills and languages used for matching."
+        title="Personal and language details"
+        description="Optional context and language facts for more precise explanations."
         state={draft.basics.confirmationStatus}
       />
       <div className="form-grid form-grid--two">
         <label>
           <span className="field-label">
-            Display name <small>Required</small>
+            Display name <small>Optional</small>
           </span>
           <input
             aria-label="Display name"
@@ -404,15 +429,7 @@ function FitSection({ draft, onChange }: EditorProps): React.JSX.Element {
             }
           />
         </label>
-        <ListField
-          label="Core skills"
-          value={draft.skills.map((fact) => fact.data.name)}
-          placeholder={'Python\nPostgreSQL\nDocker'}
-          help="Only skills you have used. New entries start at working level."
-          priority="Recommended"
-          onChange={updateSkills}
-        />
-        <div className="compact-editor">
+        <div className="compact-editor form-grid__wide">
           <div className="compact-editor__heading">
             <div>
               <span className="field-label">Languages</span>
@@ -567,9 +584,9 @@ function EvidenceSection({ draft, onChange }: EditorProps): React.JSX.Element {
     <section className="editor-section" aria-labelledby="experience-profile-heading">
       <SectionHeading
         id="experience-profile-heading"
-        step="03"
-        title="Evidence"
-        description="Concrete outcomes make matching explanations reliable."
+        step="04"
+        title="Work evidence"
+        description="Optional. Concrete outcomes improve evidence depth and scoring explanations."
       />
       {draft.workExperiences.length === 0 && (
         <EmptyHint>
@@ -1206,10 +1223,19 @@ export function ProfileEditor({ draft, onChange }: EditorProps): React.JSX.Eleme
   return (
     <div className="editor-stack">
       <SearchSection draft={draft} onChange={onChange} />
-      <FitSection draft={draft} onChange={onChange} />
-      <EvidenceSection draft={draft} onChange={onChange} />
-      <OptionalFilters draft={draft} onChange={onChange} />
-      <SupportingEvidence draft={draft} onChange={onChange} />
+      <details className="profile-disclosure profile-disclosure--section profile-advanced">
+        <summary>
+          <span>Add details for better matching</span>
+          <small>Optional · eligibility, languages, experience and preferences</small>
+        </summary>
+        <div className="detail-body editor-stack editor-stack--advanced">
+          <FitSection draft={draft} onChange={onChange} />
+          <EligibilitySection draft={draft} onChange={onChange} />
+          <EvidenceSection draft={draft} onChange={onChange} />
+          <OptionalFilters draft={draft} onChange={onChange} />
+          <SupportingEvidence draft={draft} onChange={onChange} />
+        </div>
+      </details>
     </div>
   );
 }
