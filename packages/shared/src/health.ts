@@ -25,5 +25,4 @@ export const healthResponseSchema = z
   })
   .strict();
 
-export type ComponentStatus = z.infer<typeof componentStatusSchema>;
 export type HealthResponse = z.infer<typeof healthResponseSchema>;

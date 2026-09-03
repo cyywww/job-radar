@@ -1,167 +1,260 @@
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 
-import { JobRepository, SourceRepositoryError, type DatabaseClient } from '@job-radar/db';
 import {
+  JobRepository,
+  ReviewRepository,
+  ReviewRepositoryError,
+  type DatabaseClient,
+} from '@job-radar/db';
+import {
+  bulkRescoreRequestSchema,
+  bulkRescoreResponseSchema,
+  bulkTriageRequestSchema,
+  bulkTriageResponseSchema,
+  createFeedbackRequestSchema,
+  jobReviewDetailSchema,
+  refreshJobResponseSchema,
+  retryFailedScoringRequestSchema,
+  retryFailedScoringResponseSchema,
+  reviewJobsQuerySchema,
+  reviewJobsResponseSchema,
+  restoreTriageRequestSchema,
+  restoreTriageResponseSchema,
+  scanEventSchema,
+  scoreFeedbackSchema,
+  scoreReviewEventSchema,
+  updateScoreReviewRequestSchema,
+  updateTriageRequestSchema,
+  updateTriageResponseSchema,
   AppError,
-  createSourceRequestSchema,
-  createScanRequestSchema,
-  jobDetailSchema,
-  reprocessJobsResultSchema,
-  jobsQuerySchema,
-  jobsResponseSchema,
-  scanRunSchema,
-  scansQuerySchema,
-  scansResponseSchema,
-  sourceTestResultSchema,
-  sourceViewSchema,
-  sourcesResponseSchema,
-  updateSourceRequestSchema,
+  type ScanRun,
 } from '@job-radar/shared';
 
 import { ScanCoordinator, ScanCoordinatorError } from '../services/scan-coordinator.js';
+import {
+  ScoringCoordinator,
+  ScoringCoordinatorError,
+} from '../services/scoring-coordinator.js';
 
 const idParamsSchema = z.object({ id: z.string().uuid() }).strict();
-const sourcesQuerySchema = z
-  .object({ includeDeleted: z.enum(['true', 'false']).default('false') })
-  .strict();
+const terminalScanStatuses = new Set(['succeeded', 'partial', 'failed', 'cancelled']);
+let activeSseConnections = 0;
 
-function mapCoordinatorError(error: unknown): never {
-  if (!(error instanceof ScanCoordinatorError)) throw error;
-  const statusCode =
-    error.code === 'SCAN_NOT_FOUND'
-      ? 404
-      : error.code === 'SCAN_ALREADY_RUNNING' || error.code === 'SCAN_NOT_CANCELLABLE'
-        ? 409
-        : 400;
-  throw new AppError(error.code, error.message, statusCode);
+export function getActiveScanEventConnections(): number {
+  return activeSseConnections;
 }
 
-function mapSourceError(error: unknown): never {
-  if (!(error instanceof SourceRepositoryError)) throw error;
-  const statusCode =
-    error.code === 'SOURCE_NOT_FOUND'
-      ? 404
-      : error.code === 'SOURCE_CONFLICT'
-        ? 409
-        : 400;
-  throw new AppError(error.code, error.message, statusCode);
+function mapReviewError(error: unknown): never {
+  if (error instanceof ReviewRepositoryError) {
+    throw new AppError(error.code, error.message, 404);
+  }
+  if (error instanceof ScanCoordinatorError) {
+    const statusCode =
+      error.code === 'SCAN_JOB_NOT_FOUND' || error.code === 'SCAN_NOT_FOUND'
+        ? 404
+        : error.code === 'SCAN_ALREADY_RUNNING'
+          ? 409
+          : 400;
+    throw new AppError(error.code, error.message, statusCode);
+  }
+  if (error instanceof ScoringCoordinatorError) {
+    const statusCode =
+      error.code === 'SCORING_JOB_NOT_FOUND' || error.code === 'SCORING_TASK_NOT_FOUND'
+        ? 404
+        : error.code === 'SCORING_RUN_ACTIVE' ||
+            error.code === 'SCORING_MODEL_NOT_CONFIGURED'
+          ? 409
+          : 400;
+    throw new AppError(error.code, error.message, statusCode);
+  }
+  throw error;
 }
 
 export async function registerJobRoutes(
   app: FastifyInstance,
   database: DatabaseClient,
-  coordinator: ScanCoordinator,
+  scans: ScanCoordinator,
+  scoring: ScoringCoordinator,
 ): Promise<void> {
-  const repository = new JobRepository(database);
-
-  app.get('/api/sources', async (request) => {
-    const query = sourcesQuerySchema.parse(request.query);
-    return sourcesResponseSchema.parse({
-      sources: coordinator.listSources(query.includeDeleted === 'true'),
-    });
-  });
-
-  app.post('/api/sources', async (request, reply) => {
-    try {
-      const source = coordinator.createSource(
-        createSourceRequestSchema.parse(request.body),
-      );
-      return reply.status(201).send(sourceViewSchema.parse(source));
-    } catch (error) {
-      return mapSourceError(error);
-    }
-  });
-
-  app.patch('/api/sources/:id', async (request) => {
-    try {
-      const { id } = idParamsSchema.parse(request.params);
-      return sourceViewSchema.parse(
-        coordinator.updateSource(id, updateSourceRequestSchema.parse(request.body)),
-      );
-    } catch (error) {
-      return mapSourceError(error);
-    }
-  });
-
-  app.delete('/api/sources/:id', async (request, reply) => {
-    try {
-      const { id } = idParamsSchema.parse(request.params);
-      coordinator.deleteSource(id);
-      return reply.status(204).send();
-    } catch (error) {
-      return mapSourceError(error);
-    }
-  });
-
-  app.post('/api/sources/:id/test', async (request) => {
-    try {
-      const { id } = idParamsSchema.parse(request.params);
-      return sourceTestResultSchema.parse(await coordinator.testSource(id));
-    } catch (error) {
-      return mapSourceError(error);
-    }
-  });
-
-  app.post('/api/sources/:id/rerun', async (request, reply) => {
-    try {
-      const { id } = idParamsSchema.parse(request.params);
-      const run = coordinator.start({ sourceIds: [id] });
-      return reply.status(202).send(scanRunSchema.parse(run));
-    } catch (error) {
-      return mapCoordinatorError(error);
-    }
-  });
-
-  app.post('/api/scans', async (request, reply) => {
-    try {
-      const run = coordinator.start(createScanRequestSchema.parse(request.body ?? {}));
-      return reply.status(202).send(scanRunSchema.parse(run));
-    } catch (error) {
-      return mapCoordinatorError(error);
-    }
-  });
-
-  app.get('/api/scans', async (request) => {
-    const query = scansQuerySchema.parse(request.query);
-    return scansResponseSchema.parse({ scans: coordinator.list(query.limit) });
-  });
-
-  app.get('/api/scans/:id', async (request) => {
-    try {
-      const { id } = idParamsSchema.parse(request.params);
-      return scanRunSchema.parse(coordinator.get(id));
-    } catch (error) {
-      return mapCoordinatorError(error);
-    }
-  });
-
-  app.post('/api/scans/:id/cancel', async (request) => {
-    try {
-      const { id } = idParamsSchema.parse(request.params);
-      return scanRunSchema.parse(coordinator.cancel(id));
-    } catch (error) {
-      return mapCoordinatorError(error);
-    }
-  });
+  const jobs = new JobRepository(database);
+  const review = new ReviewRepository(database);
 
   app.get('/api/jobs', async (request) => {
-    const query = jobsQuerySchema.parse(request.query);
-    return jobsResponseSchema.parse(repository.listJobs(query));
+    const query = reviewJobsQuerySchema.parse(request.query);
+    return reviewJobsResponseSchema.parse(review.listJobs(query));
   });
 
   app.get('/api/jobs/:id', async (request) => {
-    const { id } = idParamsSchema.parse(request.params);
-    const job = repository.getJob(id);
-    if (!job) throw new AppError('JOB_NOT_FOUND', 'Job does not exist', 404);
-    return jobDetailSchema.parse(job);
+    try {
+      const { id } = idParamsSchema.parse(request.params);
+      const job = jobs.getJob(id);
+      if (!job) throw new ReviewRepositoryError('JOB_NOT_FOUND', 'Job does not exist.');
+      const history = scoring.getJobHistory(id);
+      return jobReviewDetailSchema.parse({
+        job,
+        triage: review.getTriage(id),
+        currentScore: history.current,
+        currentRequirement: history.current
+          ? (history.requirements.find(
+              (requirement) => requirement.id === history.current?.requirementId,
+            ) ?? null)
+          : null,
+        scoreHistory: history.scores,
+        tasks: history.tasks,
+        attempts: history.attempts,
+        feedback: review.listFeedback(id),
+        reviewHistory: review.listReviewEvents(id),
+      });
+    } catch (error) {
+      return mapReviewError(error);
+    }
   });
 
-  app.post('/api/jobs/reprocess', async () => {
+  app.patch('/api/jobs/:id/triage', async (request) => {
     try {
-      return reprocessJobsResultSchema.parse(coordinator.reprocessJobs());
+      const { id } = idParamsSchema.parse(request.params);
+      const input = updateTriageRequestSchema.parse(request.body);
+      return updateTriageResponseSchema.parse(
+        review.updateTriage(id, input.status, input.note),
+      );
     } catch (error) {
-      return mapCoordinatorError(error);
+      return mapReviewError(error);
     }
+  });
+
+  app.post('/api/jobs/bulk-triage', async (request) => {
+    try {
+      const input = bulkTriageRequestSchema.parse(request.body);
+      return bulkTriageResponseSchema.parse(
+        review.bulkUpdateTriage(input.jobIds, input.status),
+      );
+    } catch (error) {
+      return mapReviewError(error);
+    }
+  });
+
+  app.post('/api/jobs/bulk-triage/restore', async (request) => {
+    try {
+      const input = restoreTriageRequestSchema.parse(request.body);
+      return restoreTriageResponseSchema.parse({
+        current: review.restoreTriage(input.records),
+      });
+    } catch (error) {
+      return mapReviewError(error);
+    }
+  });
+
+  app.post('/api/jobs/:id/feedback', async (request, reply) => {
+    try {
+      const { id } = idParamsSchema.parse(request.params);
+      const input = createFeedbackRequestSchema.parse(request.body);
+      return reply
+        .status(201)
+        .send(scoreFeedbackSchema.parse(review.createFeedback(id, input)));
+    } catch (error) {
+      return mapReviewError(error);
+    }
+  });
+
+  app.patch('/api/jobs/:id/review', async (request) => {
+    try {
+      const { id } = idParamsSchema.parse(request.params);
+      const input = updateScoreReviewRequestSchema.parse(request.body);
+      return scoreReviewEventSchema.parse(
+        review.updateReviewState(id, input.state, input.reason),
+      );
+    } catch (error) {
+      return mapReviewError(error);
+    }
+  });
+
+  app.post('/api/jobs/:id/refresh', async (request, reply) => {
+    try {
+      const { id } = idParamsSchema.parse(request.params);
+      return reply
+        .status(202)
+        .send(refreshJobResponseSchema.parse(scans.startJobRefresh(id)));
+    } catch (error) {
+      return mapReviewError(error);
+    }
+  });
+
+  app.post('/api/jobs/bulk-rescore', async (request) => {
+    try {
+      const input = bulkRescoreRequestSchema.parse(request.body);
+      return bulkRescoreResponseSchema.parse({
+        tasks: scoring.rescoreJobs(input.jobIds),
+      });
+    } catch (error) {
+      return mapReviewError(error);
+    }
+  });
+
+  app.post('/api/scoring/retry-failed', async (request) => {
+    const input = retryFailedScoringRequestSchema.parse(request.body ?? {});
+    return retryFailedScoringResponseSchema.parse({
+      tasks: scoring.retryFailed(input.limit),
+    });
+  });
+
+  app.get('/api/scans/:id/events', async (request, reply) => {
+    const { id } = idParamsSchema.parse(request.params);
+    let current: ScanRun;
+    try {
+      current = scans.get(id);
+    } catch (error) {
+      return mapReviewError(error);
+    }
+
+    reply.hijack();
+    reply.raw.statusCode = 200;
+    reply.raw.setHeader('content-type', 'text/event-stream; charset=utf-8');
+    reply.raw.setHeader('cache-control', 'no-cache, no-transform');
+    reply.raw.setHeader('connection', 'keep-alive');
+    activeSseConnections += 1;
+    let closed = false;
+    const interval: { timer?: NodeJS.Timeout } = {};
+    let prior = '';
+
+    const cleanup = () => {
+      if (closed) return;
+      closed = true;
+      if (interval.timer) clearInterval(interval.timer);
+      activeSseConnections -= 1;
+    };
+    const send = (run: ScanRun) => {
+      const event = scanEventSchema.parse({
+        scan: run,
+        phase: run.stage,
+        terminal: terminalScanStatuses.has(run.status),
+        emittedAt: new Date().toISOString(),
+      });
+      const state = JSON.stringify({ scan: event.scan, phase: event.phase });
+      if (state !== prior) {
+        prior = state;
+        reply.raw.write(`event: scan\ndata: ${JSON.stringify(event)}\n\n`);
+      }
+      if (event.terminal) {
+        cleanup();
+        reply.raw.end();
+      }
+    };
+
+    request.raw.once('close', cleanup);
+    reply.raw.once('close', cleanup);
+    send(current);
+    if (closed) return;
+    interval.timer = setInterval(() => {
+      if (closed) return;
+      try {
+        current = scans.get(id);
+        send(current);
+      } catch {
+        cleanup();
+        reply.raw.end();
+      }
+    }, 250);
+    interval.timer.unref();
   });
 }

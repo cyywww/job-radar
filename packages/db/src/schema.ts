@@ -29,13 +29,24 @@ export const systemMetadata = sqliteTable('system_metadata', {
   updatedAt: integer('updated_at', { mode: 'timestamp_ms' }).notNull(),
 });
 
-export const profiles = sqliteTable('profiles', {
-  id: text('id').primaryKey(),
-  currentVersion: integer('current_version').notNull(),
-  currentVersionId: text('current_version_id').notNull(),
-  createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull(),
-  updatedAt: integer('updated_at', { mode: 'timestamp_ms' }).notNull(),
-});
+export const profiles = sqliteTable(
+  'profiles',
+  {
+    id: text('id').primaryKey(),
+    name: text('name').notNull().default('Primary profile'),
+    isActive: integer('is_active', { mode: 'boolean' }).notNull().default(false),
+    currentVersion: integer('current_version').notNull(),
+    currentVersionId: text('current_version_id').notNull(),
+    createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull(),
+    updatedAt: integer('updated_at', { mode: 'timestamp_ms' }).notNull(),
+  },
+  (table) => [
+    uniqueIndex('profiles_name_uq').on(table.name),
+    uniqueIndex('profiles_active_uq')
+      .on(table.isActive)
+      .where(sql`${table.isActive} = 1`),
+  ],
+);
 
 export const profileVersions = sqliteTable(
   'profile_versions',
@@ -51,6 +62,7 @@ export const profileVersions = sqliteTable(
   },
   (table) => [
     uniqueIndex('profile_versions_profile_version_uq').on(table.profileId, table.version),
+    uniqueIndex('profile_versions_global_version_uq').on(table.version),
     index('profile_versions_profile_created_idx').on(table.profileId, table.createdAt),
     check('profile_versions_version_positive', sql`${table.version} > 0`),
   ],

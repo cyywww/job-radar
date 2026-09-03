@@ -181,6 +181,17 @@ export const runCountsSchema = z
   })
   .strict();
 
+export const runStageSchema = z.enum([
+  'queued',
+  'health',
+  'discovery',
+  'detail',
+  'persist',
+  'lifecycle',
+  'scoring',
+  'complete',
+]);
+
 export const sourceRunSchema = z
   .object({
     id: z.string().uuid(),
@@ -189,16 +200,7 @@ export const sourceRunSchema = z
     sourceName: z.string().min(1),
     configVersion: z.number().int().positive(),
     status: sourceRunStatusSchema,
-    stage: z.enum([
-      'queued',
-      'health',
-      'discovery',
-      'detail',
-      'persist',
-      'lifecycle',
-      'scoring',
-      'complete',
-    ]),
+    stage: runStageSchema,
     failureStage: z
       .enum(['health', 'discovery', 'detail', 'persist', 'lifecycle', 'scoring'])
       .nullable(),
@@ -257,16 +259,7 @@ export const scanRunSchema = z
   .object({
     id: z.string().uuid(),
     status: scanStatusSchema,
-    stage: z.enum([
-      'queued',
-      'health',
-      'discovery',
-      'detail',
-      'persist',
-      'lifecycle',
-      'scoring',
-      'complete',
-    ]),
+    stage: runStageSchema,
     profileVersion: z.number().int().positive(),
     counts: runCountsSchema,
     errorSummary: z.string().max(500).nullable(),
@@ -365,38 +358,7 @@ export const jobDetailSchema = jobSummarySchema
   })
   .strict();
 
-export const jobsQuerySchema = z
-  .object({
-    active: z
-      .enum(['true', 'false', 'all'])
-      .default('true')
-      .transform((value) => (value === 'all' ? null : value === 'true')),
-    search: z.string().trim().max(200).default(''),
-    limit: z.coerce.number().int().min(1).max(100).default(50),
-    offset: z.coerce.number().int().min(0).default(0),
-  })
-  .strict();
-export const jobsResponseSchema = z
-  .object({
-    jobs: z.array(jobSummarySchema),
-    total: z.number().int().nonnegative(),
-    limit: z.number().int().positive(),
-    offset: z.number().int().nonnegative(),
-  })
-  .strict();
-
-export const reprocessJobsResultSchema = z
-  .object({
-    processed: z.number().int().nonnegative(),
-    canonicalUrlsUpdated: z.number().int().nonnegative(),
-    fingerprintsUpdated: z.number().int().nonnegative(),
-    merged: z.number().int().nonnegative(),
-    snapshotsPreserved: z.number().int().nonnegative(),
-  })
-  .strict();
-
 export type SourceType = z.infer<typeof sourceTypeSchema>;
-export type SourceSupportLevel = z.infer<typeof sourceSupportLevelSchema>;
 export type SourceHealthStatus = z.infer<typeof sourceHealthStatusSchema>;
 export type SourceErrorCategory = z.infer<typeof sourceErrorCategorySchema>;
 export type JobTechSourceConfig = z.infer<typeof jobTechSourceConfigSchema>;
@@ -407,13 +369,10 @@ export type SourceView = z.infer<typeof sourceViewSchema>;
 export type SourceTestResult = z.infer<typeof sourceTestResultSchema>;
 export type CreateSourceRequest = z.infer<typeof createSourceRequestSchema>;
 export type UpdateSourceRequest = z.infer<typeof updateSourceRequestSchema>;
-export type RemoteMode = z.infer<typeof remoteModeSchema>;
 export type NormalizedJob = z.infer<typeof normalizedJobSchema>;
 export type RunCounts = z.infer<typeof runCountsSchema>;
 export type SourceRun = z.infer<typeof sourceRunSchema>;
 export type ScanRun = z.infer<typeof scanRunSchema>;
 export type CreateScanRequest = z.infer<typeof createScanRequestSchema>;
-export type JobsQuery = z.infer<typeof jobsQuerySchema>;
 export type JobSummary = z.infer<typeof jobSummarySchema>;
 export type JobDetail = z.infer<typeof jobDetailSchema>;
-export type ReprocessJobsResult = z.infer<typeof reprocessJobsResultSchema>;

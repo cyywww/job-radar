@@ -5,7 +5,6 @@ import {
   bulkTriageResponseSchema,
   createFeedbackRequestSchema,
   createSourceRequestSchema,
-  dashboardResponseSchema,
   jobReviewDetailSchema,
   refreshJobResponseSchema,
   retryFailedScoringResponseSchema,
@@ -29,7 +28,6 @@ import {
   updateTriageResponseSchema,
   type CreateFeedbackRequest,
   type CreateSourceRequest,
-  type DashboardResponse,
   type JobReviewDetail,
   type ReviewJobSummary,
   type ReviewJobsQuery,
@@ -46,36 +44,7 @@ import {
   type UpdateSourceRequest,
 } from '@job-radar/shared';
 
-export class JobsApiError extends Error {
-  public constructor(
-    public readonly status: number,
-    message: string,
-  ) {
-    super(message);
-    this.name = 'JobsApiError';
-  }
-}
-
-async function requestJson(path: string, init: RequestInit = {}): Promise<unknown> {
-  const response = await fetch(path, {
-    ...init,
-    headers: {
-      accept: 'application/json',
-      ...(init.body ? { 'content-type': 'application/json' } : {}),
-      ...init.headers,
-    },
-  });
-  if (!response.ok) {
-    const body = (await response.json().catch(() => null)) as {
-      error?: { message?: string };
-    } | null;
-    throw new JobsApiError(
-      response.status,
-      body?.error?.message ?? `Request failed with HTTP ${response.status}`,
-    );
-  }
-  return response.json();
-}
+import { request, requestJson } from './request.js';
 
 export async function fetchReviewJobs(query: ReviewJobsQuery): Promise<{
   jobs: ReviewJobSummary[];
@@ -108,17 +77,13 @@ export async function fetchReviewJobs(query: ReviewJobsQuery): Promise<{
     if (value) parameters.set(key, value);
   }
   const response = reviewJobsResponseSchema.parse(
-    await requestJson(`/api/review/jobs?${parameters.toString()}`),
+    await requestJson(`/api/jobs?${parameters.toString()}`),
   );
   return { jobs: response.jobs, total: response.total };
 }
 
-export async function fetchDashboard(): Promise<DashboardResponse> {
-  return dashboardResponseSchema.parse(await requestJson('/api/dashboard'));
-}
-
 export async function fetchReviewJob(jobId: string): Promise<JobReviewDetail> {
-  return jobReviewDetailSchema.parse(await requestJson(`/api/review/jobs/${jobId}`));
+  return jobReviewDetailSchema.parse(await requestJson(`/api/jobs/${jobId}`));
 }
 
 export async function updateJobTriage(
@@ -273,19 +238,7 @@ export async function testSource(sourceId: string): Promise<SourceTestResult> {
 }
 
 export async function deleteSource(sourceId: string): Promise<void> {
-  const response = await fetch(`/api/sources/${sourceId}`, {
-    method: 'DELETE',
-    headers: { accept: 'application/json' },
-  });
-  if (!response.ok) {
-    const body = (await response.json().catch(() => null)) as {
-      error?: { message?: string };
-    } | null;
-    throw new JobsApiError(
-      response.status,
-      body?.error?.message ?? `Request failed with HTTP ${response.status}`,
-    );
-  }
+  await request(`/api/sources/${sourceId}`, { method: 'DELETE' });
 }
 
 export async function fetchScans(): Promise<ScanRun[]> {

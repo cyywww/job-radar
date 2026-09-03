@@ -1,7 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
 import {
-  STRONG_MATCH_THRESHOLD,
   bulkTriageRequestSchema,
   createFeedbackRequestSchema,
   jobScoreSummarySchema,
@@ -13,10 +12,6 @@ import {
 } from './review.js';
 
 describe('M4 review contracts', () => {
-  it('uses one explicit strong-match display threshold', () => {
-    expect(STRONG_MATCH_THRESHOLD).toBe(80);
-  });
-
   it('bounds and normalizes job review queries', () => {
     expect(
       reviewJobsQuerySchema.parse({

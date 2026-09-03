@@ -94,7 +94,7 @@ run records the version it used. Soft deletion keeps existing provenance auditab
 
 A source rerun creates a normal explicit scan for that source. Job refresh instead fetches
 the selected job's current canonical source identity and persists any new material
-snapshot; it is deliberately distinct from deterministic historical job reprocessing.
+snapshot. Historical job reprocessing is no longer exposed or implemented.
 The SSE endpoint sends the current persisted scan immediately, then changed stage/count/
 terminal snapshots only. It cleans up on disconnect and stops at a terminal status. It
 contains no descriptions, Profile data, request headers, tokens, or raw responses.

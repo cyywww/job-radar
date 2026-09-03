@@ -9,8 +9,11 @@ import { getAppConfig } from '@job-radar/config';
 import { openDatabase, runMigrations } from '@job-radar/db';
 import {
   confirmedProfileViewSchema,
+  deleteProfileResponseSchema,
   profileImportResponseSchema,
+  profileResourceSchema,
   profileSnapshotSchema,
+  profilesResponseSchema,
   profileVersionsResponseSchema,
 } from '@job-radar/shared';
 import { createFictionalProfileInput } from '@job-radar/testing';
@@ -39,170 +42,271 @@ beforeEach(async () => {
 
 afterEach(async () => app.close());
 
-describe('profile routes', () => {
-  it('creates, edits, and reads immutable profile versions', async () => {
-    const createResponse = await app.inject({
-      method: 'POST',
-      url: '/api/profile',
-      payload: createFictionalProfileInput(),
-    });
-    const created = profileSnapshotSchema.parse(createResponse.json());
-    expect(createResponse.statusCode).toBe(201);
+function profileInputWithSource(sourceId: string) {
+  const fixture = createFictionalProfileInput();
+  const withSource = <T extends { sourceId: string }>(fact: T): T => ({
+    ...fact,
+    sourceId,
+  });
+  return {
+    ...fixture,
+    sources: fixture.sources.map((source) => ({ ...source, id: sourceId })),
+    basics: withSource(fixture.basics),
+    workExperiences: fixture.workExperiences.map(withSource),
+    educationExperiences: fixture.educationExperiences.map(withSource),
+    skills: fixture.skills.map(withSource),
+    languages: fixture.languages.map(withSource),
+    certifications: fixture.certifications.map(withSource),
+    projects: fixture.projects.map(withSource),
+    preferences: withSource(fixture.preferences),
+  };
+}
 
-    const fixture = createFictionalProfileInput();
-    const updateResponse = await app.inject({
-      method: 'PUT',
-      url: '/api/profile',
+describe('profile routes', () => {
+  it('creates, selects, renames, lists, and deletes multiple profiles', async () => {
+    const productResponse = await app.inject({
+      method: 'POST',
+      url: '/api/profiles',
+      payload: { name: 'Product roles', profile: createFictionalProfileInput() },
+    });
+    const product = profileResourceSchema.parse(productResponse.json());
+    const backendResponse = await app.inject({
+      method: 'POST',
+      url: '/api/profiles',
       payload: {
-        ...fixture,
-        baseVersion: created.version,
-        changeSummary: 'Edited through profile API',
-        basics: {
-          ...fixture.basics,
-          data: { ...fixture.basics.data, headline: 'Fictional API editor' },
+        name: 'Backend roles',
+        profile: profileInputWithSource('10000000-0000-4000-8000-000000000051'),
+      },
+    });
+    const backend = profileResourceSchema.parse(backendResponse.json());
+
+    expect(productResponse.statusCode).toBe(201);
+    expect(backend.profile.version).toBe(2);
+    expect(
+      profilesResponseSchema
+        .parse((await app.inject({ method: 'GET', url: '/api/profiles' })).json())
+        .profiles.map(({ name, isActive }) => [name, isActive]),
+    ).toEqual([
+      ['Backend roles', true],
+      ['Product roles', false],
+    ]);
+
+    const selectResponse = await app.inject({
+      method: 'POST',
+      url: `/api/profiles/${product.profile.id}/select`,
+    });
+    expect(profileResourceSchema.parse(selectResponse.json()).summary.isActive).toBe(
+      true,
+    );
+    expect(
+      confirmedProfileViewSchema.parse(
+        (await app.inject({ method: 'GET', url: '/api/profile/confirmed' })).json(),
+      ).profileId,
+    ).toBe(product.profile.id);
+
+    const renameResponse = await app.inject({
+      method: 'PUT',
+      url: `/api/profiles/${product.profile.id}`,
+      payload: {
+        name: 'Product and design roles',
+        profile: {
+          ...createFictionalProfileInput(),
+          baseVersion: product.profile.version,
+          changeSummary: 'Renamed a fictional strategy',
         },
       },
     });
-    const updated = profileSnapshotSchema.parse(updateResponse.json());
-    const versionOneResponse = await app.inject({
-      method: 'GET',
-      url: '/api/profile/versions/1',
-    });
-    const versionsResponse = await app.inject({
-      method: 'GET',
-      url: '/api/profile/versions',
-    });
+    const renamed = profileResourceSchema.parse(renameResponse.json());
+    expect(renamed.summary.name).toBe('Product and design roles');
+    expect(renamed.profile.version).toBe(3);
+    expect(
+      profileVersionsResponseSchema
+        .parse(
+          (
+            await app.inject({
+              method: 'GET',
+              url: `/api/profiles/${product.profile.id}/versions`,
+            })
+          ).json(),
+        )
+        .versions.map(({ version }) => version),
+    ).toEqual([3, 1]);
 
+    const duplicate = await app.inject({
+      method: 'POST',
+      url: '/api/profiles',
+      payload: {
+        name: 'Backend roles',
+        profile: profileInputWithSource('10000000-0000-4000-8000-000000000052'),
+      },
+    });
+    expect(duplicate.statusCode).toBe(409);
+
+    const deleted = deleteProfileResponseSchema.parse(
+      (
+        await app.inject({
+          method: 'DELETE',
+          url: `/api/profiles/${product.profile.id}`,
+        })
+      ).json(),
+    );
+    expect(deleted).toEqual({
+      deletedId: product.profile.id,
+      activeProfileId: backend.profile.id,
+    });
+    expect(
+      confirmedProfileViewSchema.parse(
+        (await app.inject({ method: 'GET', url: '/api/profile/confirmed' })).json(),
+      ).profileId,
+    ).toBe(backend.profile.id);
+  });
+
+  it('edits facts and preferences through one versioned Profile resource', async () => {
+    const fixture = createFictionalProfileInput();
+    const createdResponse = await app.inject({
+      method: 'POST',
+      url: '/api/profiles',
+      payload: { name: 'Fictional profile', profile: fixture },
+    });
+    const created = profileResourceSchema.parse(createdResponse.json()).profile;
+    expect(createdResponse.statusCode).toBe(201);
+    const updateResponse = await app.inject({
+      method: 'PUT',
+      url: `/api/profiles/${created.id}`,
+      payload: {
+        name: 'Fictional profile',
+        profile: {
+          ...fixture,
+          baseVersion: created.version,
+          changeSummary: 'Edited facts and preferences together',
+          basics: {
+            ...fixture.basics,
+            data: { ...fixture.basics.data, headline: 'Fictional API editor' },
+          },
+          preferences: {
+            ...fixture.preferences,
+            data: { ...fixture.preferences.data, exclusions: ['Night shifts'] },
+          },
+        },
+      },
+    });
     expect(updateResponse.statusCode).toBe(200);
+    const updated = profileResourceSchema.parse(updateResponse.json()).profile;
     expect(updated.version).toBe(2);
+    expect(updated.preferences.data.exclusions).toEqual(['Night shifts']);
+    const original = profileSnapshotSchema.parse(
+      (
+        await app.inject({ method: 'GET', url: `/api/profiles/${created.id}/versions/1` })
+      ).json(),
+    );
+    expect(original.basics.data.headline).toBe('Product engineer for imaginary services');
+    expect(original.preferences.data.exclusions).toEqual(
+      fixture.preferences.data.exclusions,
+    );
     expect(
-      profileSnapshotSchema.parse(versionOneResponse.json()).basics.data.headline,
-    ).toBe('Product engineer for imaginary services');
-    expect(
-      profileVersionsResponseSchema.parse(versionsResponse.json()).versions,
+      profileVersionsResponseSchema.parse(
+        (
+          await app.inject({ method: 'GET', url: `/api/profiles/${created.id}/versions` })
+        ).json(),
+      ).versions,
     ).toHaveLength(2);
+    const stale = await app.inject({
+      method: 'PUT',
+      url: `/api/profiles/${created.id}`,
+      payload: { name: 'Fictional profile', profile: { ...fixture, baseVersion: 1 } },
+    });
+    expect(stale.statusCode).toBe(409);
   });
 
   it('keeps imported facts pending until explicit confirmation', async () => {
-    const importResponse = await app.inject({
-      method: 'POST',
-      url: '/api/profile/import',
-      payload: {
-        sourceType: 'pasted_text',
-        label: 'Fictional paste',
-        text: 'Name: Robin North\nLocation: Stockholm',
-      },
-    });
-    const imported = profileImportResponseSchema.parse(importResponse.json());
-    const createResponse = await app.inject({
-      method: 'POST',
-      url: '/api/profile',
-      payload: imported.draft,
-    });
-    const created = profileSnapshotSchema.parse(createResponse.json());
-    const beforeConfirmation = confirmedProfileViewSchema.parse(
+    const imported = profileImportResponseSchema.parse(
+      (
+        await app.inject({
+          method: 'POST',
+          url: '/api/profiles/import',
+          payload: {
+            sourceType: 'pasted_text',
+            label: 'Fictional paste',
+            text: 'Name: Robin North\nLocation: Stockholm',
+          },
+        })
+      ).json(),
+    );
+    const created = profileResourceSchema.parse(
+      (
+        await app.inject({
+          method: 'POST',
+          url: '/api/profiles',
+          payload: { name: 'Imported profile', profile: imported.draft },
+        })
+      ).json(),
+    ).profile;
+    const before = confirmedProfileViewSchema.parse(
       (await app.inject({ method: 'GET', url: '/api/profile/confirmed' })).json(),
     );
-
     expect(created.status).toBe('draft');
-    expect(beforeConfirmation.basics).toBeNull();
-    expect(beforeConfirmation.preferences).toBeNull();
-
-    const confirmResponse = await app.inject({
-      method: 'POST',
-      url: '/api/profile/confirm',
-      payload: {
-        baseVersion: created.version,
-        factIds: [],
-        confirmAllPending: true,
-        changeSummary: 'Reviewed fictional import',
-      },
-    });
-    const confirmed = profileSnapshotSchema.parse(confirmResponse.json());
+    expect(before.basics).toBeNull();
+    expect(before.preferences).toBeNull();
+    const confirmed = profileResourceSchema.parse(
+      (
+        await app.inject({
+          method: 'POST',
+          url: `/api/profiles/${created.id}/confirm`,
+          payload: {
+            baseVersion: created.version,
+            factIds: [],
+            confirmAllPending: true,
+            changeSummary: 'Reviewed fictional import',
+          },
+        })
+      ).json(),
+    ).profile;
     expect(confirmed.version).toBe(2);
     expect(confirmed.status).toBe('confirmed');
   });
 
-  it('previews confirmed hard constraints without scoring jobs', async () => {
-    const preferences = createFictionalProfileInput().preferences.data;
-    const response = await app.inject({
-      method: 'POST',
-      url: '/api/preferences/preview',
-      payload: { preferences, confirmationStatus: 'confirmed' },
-    });
-
-    expect(response.statusCode).toBe(200);
-    expect(response.json()).toMatchObject({
-      ready: true,
-      exclusions: ['Unpaid roles', 'Full-time office attendance'],
-    });
-  });
-
-  it('updates preferences through a new Profile version', async () => {
-    const createResponse = await app.inject({
-      method: 'POST',
-      url: '/api/profile',
-      payload: createFictionalProfileInput(),
-    });
-    const created = profileSnapshotSchema.parse(createResponse.json());
-    const sourceId = '10000000-0000-4000-8000-000000000099';
-    const updateResponse = await app.inject({
-      method: 'PUT',
-      url: '/api/preferences',
-      payload: {
-        baseVersion: created.version,
-        source: {
-          id: sourceId,
-          type: 'user_input',
-          label: 'Fictional preference edit',
-        },
-        preferences: {
-          id: created.preferences.id,
-          sourceId,
-          confirmationStatus: 'confirmed',
-          data: {
-            ...createFictionalProfileInput().preferences.data,
-            exclusions: ['Night shifts'],
+  it('does not expose another Profile through its version URL', async () => {
+    const first = profileResourceSchema.parse(
+      (
+        await app.inject({
+          method: 'POST',
+          url: '/api/profiles',
+          payload: { name: 'First profile', profile: createFictionalProfileInput() },
+        })
+      ).json(),
+    ).profile;
+    const second = profileResourceSchema.parse(
+      (
+        await app.inject({
+          method: 'POST',
+          url: '/api/profiles',
+          payload: {
+            name: 'Second profile',
+            profile: profileInputWithSource('10000000-0000-4000-8000-000000000077'),
           },
-        },
-        changeSummary: 'Updated fictional hard exclusions',
-      },
-    });
-    const currentPreferences = await app.inject({
+        })
+      ).json(),
+    ).profile;
+    const response = await app.inject({
       method: 'GET',
-      url: '/api/preferences',
+      url: `/api/profiles/${first.id}/versions/${second.version}`,
     });
-    const versionOne = profileSnapshotSchema.parse(
-      (await app.inject({ method: 'GET', url: '/api/profile/versions/1' })).json(),
-    );
-
-    expect(profileSnapshotSchema.parse(updateResponse.json()).version).toBe(2);
-    expect(currentPreferences.json()).toMatchObject({
-      data: { exclusions: ['Night shifts'] },
-    });
-    expect(versionOne.preferences.data.exclusions).toEqual([
-      'Unpaid roles',
-      'Full-time office attendance',
-    ]);
+    expect(response.statusCode).toBe(404);
   });
 
   it('rejects invalid profile payloads and unsafe file paths', async () => {
-    const invalidProfile = await app.inject({
+    const invalid = await app.inject({
       method: 'POST',
-      url: '/api/profile',
-      payload: { sources: [] },
+      url: '/api/profiles',
+      payload: { name: 'Invalid profile', profile: { sources: [] } },
     });
     const traversal = await app.inject({
       method: 'POST',
-      url: '/api/profile/import/file',
-      headers: {
-        'content-type': 'text/plain',
-        'x-file-name': '../resume.txt',
-      },
+      url: '/api/profiles/import/file',
+      headers: { 'content-type': 'text/plain', 'x-file-name': '../resume.txt' },
       payload: 'Name: Robin North',
     });
-
-    expect(invalidProfile.statusCode).toBe(400);
+    expect(invalid.statusCode).toBe(400);
     expect(traversal.statusCode).toBe(400);
     expect(traversal.json()).toMatchObject({
       error: { code: 'PROFILE_FILE_NAME_INVALID' },
@@ -212,14 +316,10 @@ describe('profile routes', () => {
   it('enforces the local file import size limit', async () => {
     const response = await app.inject({
       method: 'POST',
-      url: '/api/profile/import/file',
-      headers: {
-        'content-type': 'text/plain',
-        'x-file-name': 'fictional-profile.txt',
-      },
+      url: '/api/profiles/import/file',
+      headers: { 'content-type': 'text/plain', 'x-file-name': 'fictional-profile.txt' },
       payload: 'x'.repeat(512 * 1024 + 1),
     });
-
     expect(response.statusCode).toBe(413);
   });
 });

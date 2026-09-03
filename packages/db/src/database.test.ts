@@ -4,8 +4,7 @@ import { join } from 'node:path';
 
 import { afterEach, describe, expect, it } from 'vitest';
 
-import { createProfileRequestSchema, normalizedJobSchema } from '@job-radar/shared';
-import { createFictionalProfileInput } from '@job-radar/testing';
+import { normalizedJobSchema } from '@job-radar/shared';
 
 import type { DatabaseClient } from './database.js';
 import {
@@ -15,7 +14,6 @@ import {
   runMigrations,
 } from './database.js';
 import { JobRepository } from './job-repository.js';
-import { ProfileRepository } from './profile-repository.js';
 
 let database: DatabaseClient | undefined;
 
@@ -28,6 +26,8 @@ const migrationFiles = [
   '0005_sweden_source_cleanup.sql',
   '0006_neat_clea.sql',
   '0007_bizarre_richard_fisk.sql',
+  '0008_melted_purple_man.sql',
+  '0009_light_sleepwalker.sql',
 ] as const;
 
 function copyMigrationsThrough(target: string, lastIndex: number): void {
@@ -52,6 +52,27 @@ function copyMigrationsThrough(target: string, lastIndex: number): void {
     join(targetMeta, '_journal.json'),
     JSON.stringify({ ...journal, entries: journal.entries.slice(0, lastIndex + 1) }),
   );
+}
+
+function insertLegacyProfile(database: DatabaseClient): { version: number } {
+  const profileId = '40000000-0000-4000-8000-000000000098';
+  const versionId = '50000000-0000-4000-8000-000000000098';
+  const timestamp = Date.parse('2026-08-29T08:00:00.000Z');
+  database.sqlite
+    .prepare(
+      `insert into profiles
+        (id, current_version, current_version_id, created_at, updated_at)
+       values (?, 1, ?, ?, ?)`,
+    )
+    .run(profileId, versionId, timestamp, timestamp);
+  database.sqlite
+    .prepare(
+      `insert into profile_versions
+        (id, profile_id, version, status, change_summary, created_at)
+       values (?, ?, 1, 'confirmed', 'Fictional legacy profile', ?)`,
+    )
+    .run(versionId, profileId, timestamp);
+  return { version: 1 };
 }
 
 afterEach(() => {
@@ -214,10 +235,7 @@ describe('database infrastructure', () => {
     database = openDatabase(join(directory, 'm2-upgrade.sqlite'));
     runMigrations(database, m2Migrations);
 
-    const profiles = new ProfileRepository(database);
-    const profile = profiles.create(
-      createProfileRequestSchema.parse(createFictionalProfileInput()),
-    );
+    const profile = insertLegacyProfile(database);
     const jobs = new JobRepository(database);
     const source = jobs.ensureDefaultSources();
     const scanId = '80000000-0000-4000-8000-000000000066';
@@ -281,9 +299,7 @@ describe('database infrastructure', () => {
     database = openDatabase(join(directory, 'm3-upgrade.sqlite'));
     runMigrations(database, m3Migrations);
 
-    const profile = new ProfileRepository(database).create(
-      createProfileRequestSchema.parse(createFictionalProfileInput()),
-    );
+    const profile = insertLegacyProfile(database);
     const timestamp = Date.parse('2026-08-31T08:00:00.000Z');
     const sourceId = '70000000-0000-4000-8000-000000000077';
     const scanId = '80000000-0000-4000-8000-000000000077';
@@ -485,6 +501,53 @@ describe('database infrastructure', () => {
       outputTokens: null,
       reasoningOutputTokens: null,
     });
+    expect(database.sqlite.pragma('integrity_check', { simple: true })).toBe('ok');
+    expect(database.sqlite.pragma('foreign_key_check')).toEqual([]);
+  });
+
+  it('upgrades the existing singleton profile as the selected named profile', () => {
+    const directory = mkdtempSync(join(tmpdir(), 'job-radar-profile-upgrade-'));
+    const previousMigrations = join(directory, 'previous-migrations');
+    copyMigrationsThrough(previousMigrations, 8);
+    database = openDatabase(join(directory, 'profile-upgrade.sqlite'));
+    runMigrations(database, previousMigrations);
+
+    const profileId = '40000000-0000-4000-8000-000000000061';
+    const versionId = '50000000-0000-4000-8000-000000000061';
+    const timestamp = Date.parse('2026-09-02T08:00:00.000Z');
+    database.sqlite
+      .prepare(
+        `insert into profiles
+          (id, current_version, current_version_id, created_at, updated_at)
+         values (?, 1, ?, ?, ?)`,
+      )
+      .run(profileId, versionId, timestamp, timestamp);
+    database.sqlite
+      .prepare(
+        `insert into profile_versions
+          (id, profile_id, version, status, change_summary, created_at)
+         values (?, ?, 1, 'confirmed', 'Fictional pre-upgrade profile', ?)`,
+      )
+      .run(versionId, profileId, timestamp);
+
+    runMigrations(database, getMigrationsFolder());
+
+    expect(
+      database.sqlite
+        .prepare(
+          `select name, is_active as isActive, current_version as currentVersion
+           from profiles where id = ?`,
+        )
+        .get(profileId),
+    ).toEqual({ name: 'Primary profile', isActive: 1, currentVersion: 1 });
+    expect(
+      database.sqlite
+        .prepare(
+          `select name from sqlite_master
+           where type = 'index' and name = 'profile_versions_global_version_uq'`,
+        )
+        .get(),
+    ).toEqual({ name: 'profile_versions_global_version_uq' });
     expect(database.sqlite.pragma('integrity_check', { simple: true })).toBe('ok');
     expect(database.sqlite.pragma('foreign_key_check')).toEqual([]);
   });

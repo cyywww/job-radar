@@ -188,8 +188,8 @@ describe('Sweden-first source API', () => {
   it('tests, edits, enables, reruns, and softly deletes a target page', async () => {
     await app.inject({
       method: 'POST',
-      url: '/api/profile',
-      payload: createFictionalProfileInput(),
+      url: '/api/profiles',
+      payload: { name: 'Fictional profile', profile: createFictionalProfileInput() },
     });
     const source = await createTargetPage('Northstar target page');
     const tested = sourceTestResultSchema.parse(
@@ -256,8 +256,8 @@ describe('Sweden-first source API', () => {
   it('isolates an optional target-page failure from the primary JobTech scan', async () => {
     await app.inject({
       method: 'POST',
-      url: '/api/profile',
-      payload: createFictionalProfileInput(),
+      url: '/api/profiles',
+      payload: { name: 'Fictional profile', profile: createFictionalProfileInput() },
     });
     const targetPage = await createTargetPage('Failing target page');
     await app.inject({

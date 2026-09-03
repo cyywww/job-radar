@@ -9,6 +9,7 @@ import type {
   TriageStatus,
 } from '@job-radar/shared';
 
+import { JobDetailPanel } from './JobDetailPanel.js';
 import { JobsWorkspace } from './JobsWorkspace.js';
 
 const timestamp = '2026-09-01T08:00:00.000Z';
@@ -370,10 +371,16 @@ function installFetch(
     async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
       const path = input.toString();
       const method = init?.method ?? 'GET';
-      if (path.startsWith('/api/review/jobs?')) {
+      if (path.startsWith('/api/jobs?')) {
         if (options.failList) {
           return response(
-            { error: { message: 'Fictional review network failure.' } },
+            {
+              error: {
+                code: 'TEST_ERROR',
+                requestId: 'test-request',
+                message: 'Fictional review network failure.',
+              },
+            },
             503,
           );
         }
@@ -382,7 +389,7 @@ function installFetch(
         }
         return response({ jobs: [summaryFactory()], total: 1, limit: 50, offset: 0 });
       }
-      if (path === `/api/review/jobs/${jobId}`) return response(detailFactory());
+      if (path === `/api/jobs/${jobId}`) return response(detailFactory());
       if (path === '/api/sources?includeDeleted=true') {
         return response({ sources: [source] });
       }
@@ -396,7 +403,16 @@ function installFetch(
       }
       if (path === `/api/jobs/${jobId}/triage` && method === 'PATCH') {
         if (options.failTriage) {
-          return response({ error: { message: 'Fictional triage rejection.' } }, 409);
+          return response(
+            {
+              error: {
+                code: 'TEST_ERROR',
+                requestId: 'test-request',
+                message: 'Fictional triage rejection.',
+              },
+            },
+            409,
+          );
         }
         const previous = triageStatus;
         triageStatus = (JSON.parse(String(init?.body)) as { status: TriageStatus })
@@ -462,7 +478,16 @@ function installFetch(
           createdAt: timestamp,
         });
       }
-      return response({ error: { message: `Unexpected ${method} ${path}` } }, 500);
+      return response(
+        {
+          error: {
+            code: 'TEST_ERROR',
+            requestId: 'test-request',
+            message: `Unexpected ${method} ${path}`,
+          },
+        },
+        500,
+      );
     },
   );
 }
@@ -483,11 +508,11 @@ describe('JobsWorkspace', () => {
     expect(
       (
         screen.getByRole('button', {
-          name: 'Process scoring queue',
+          name: 'Analyze next job',
         }) as HTMLButtonElement
       ).disabled,
     ).toBe(true);
-    expect(screen.getByText(/disabled until JOB_RADAR_CODEX_MODEL/)).toBeTruthy();
+    expect(screen.getByText(/AI analysis is off/)).toBeTruthy();
   });
 
   it('renders table/card views, distinct scores, evidence, and untrusted JD as text', async () => {
@@ -500,28 +525,35 @@ describe('JobsWorkspace', () => {
     await screen.findByRole('button', { name: /Product Engineer/ });
     const scoreSection = (
       await screen.findByRole('heading', {
-        name: 'Formal deterministic score',
+        name: 'Why this job',
       })
     ).closest('section')!;
-    expect(
-      within(scoreSection).getByText('Match score').previousSibling?.textContent,
-    ).toBe('82');
-    expect(
-      within(scoreSection).getByText('Ranking score').previousSibling?.textContent,
-    ).toBe('86');
-    expect(screen.getByText('Eligibility Gate')).toBeTruthy();
+    expect(within(scoreSection).getByText('Match').previousSibling?.textContent).toBe(
+      '82',
+    );
+    expect(within(scoreSection).getByText('Priority').previousSibling?.textContent).toBe(
+      '86',
+    );
+    expect(screen.getByText('Eligibility checks')).toBeTruthy();
     expect(screen.getByText(/Confirmed fictional TypeScript evidence/)).toBeTruthy();
     expect(screen.getByText(/1,250 total tokens/)).toBeTruthy();
     expect(screen.getByText(/window.pwned/)).toBeTruthy();
     expect(document.querySelector('.job-description script')).toBeNull();
     expect((window as unknown as { pwned?: boolean }).pwned).toBeUndefined();
     expect(
-      screen.getByRole('link', { name: /Open original listing/ }).getAttribute('rel'),
+      screen.getByRole('link', { name: /Open listing/ }).getAttribute('rel'),
     ).toContain('noopener');
 
-    await user.click(screen.getByRole('button', { name: 'Cards' }));
+    expect(
+      screen.getByRole('button', { name: 'Cards' }).getAttribute('aria-pressed'),
+    ).toBe('true');
     expect(
       screen.getByRole('button', { name: /Northstar Example Works AB/ }),
+    ).toBeTruthy();
+    await user.click(screen.getByText('List tools'));
+    await user.click(screen.getByRole('button', { name: 'Table' }));
+    expect(
+      screen.getByRole('button', { name: /Product Engineer/ }).closest('tr'),
     ).toBeTruthy();
     await user.click(screen.getByRole('button', { name: 'Save filters' }));
     expect(window.localStorage.getItem('job-radar.jobs.filters.v1')).toContain(
@@ -536,6 +568,16 @@ describe('JobsWorkspace', () => {
     const user = userEvent.setup();
     const first = render(<JobsWorkspace />);
     await screen.findByRole('button', { name: /Product Engineer/ });
+
+    const quickViews = screen.getByLabelText('Opportunity views');
+    await user.click(within(quickViews).getByRole('button', { name: 'Saved' }));
+    await waitFor(() =>
+      expect((screen.getByLabelText('State') as HTMLSelectElement).value).toBe(
+        'shortlisted',
+      ),
+    );
+    await user.click(within(quickViews).getByRole('button', { name: 'All' }));
+    expect((screen.getByLabelText('State') as HTMLSelectElement).value).toBe('');
 
     await user.type(screen.getByRole('searchbox'), 'SQLite');
     await user.selectOptions(screen.getByLabelText('State'), 'shortlisted');
@@ -581,15 +623,17 @@ describe('JobsWorkspace', () => {
     const user = userEvent.setup();
     render(<JobsWorkspace />);
     const detailPanel = await screen.findByLabelText('Job detail');
-    await screen.findByRole('heading', { name: 'Formal deterministic score' });
+    await screen.findByRole('heading', { name: 'Why this job' });
 
-    await user.click(within(detailPanel).getByRole('button', { name: 'Shortlist' }));
+    await user.click(within(detailPanel).getByRole('button', { name: 'Save' }));
     const undo = await screen.findByRole('button', { name: 'Undo' });
     expect(triageStatus).toBe('shortlisted');
     expect(document.activeElement).toBe(undo);
     await user.click(undo);
     await waitFor(() => expect(triageStatus).toBe('new'));
 
+    await user.click(screen.getByText('List tools'));
+    await user.click(screen.getByRole('button', { name: 'Select jobs' }));
     await user.click(screen.getByRole('checkbox', { name: 'Select Product Engineer' }));
     const bulk = document.querySelector('.bulk-actions') as HTMLElement;
     await user.click(within(bulk).getByRole('button', { name: 'Ignore' }));
@@ -604,7 +648,7 @@ describe('JobsWorkspace', () => {
     await waitFor(() => expect(triageStatus).toBe('new'));
 
     await user.click(screen.getByRole('checkbox', { name: 'Select Product Engineer' }));
-    await user.click(within(bulk).getByRole('button', { name: 'Rescore' }));
+    await user.click(within(bulk).getByRole('button', { name: 'Reanalyze' }));
     await waitFor(() =>
       expect(fetchMock).toHaveBeenCalledWith(
         '/api/jobs/bulk-rescore',
@@ -618,34 +662,34 @@ describe('JobsWorkspace', () => {
     vi.stubGlobal('fetch', installFetch(summary, detail, { failTriage: true }));
     const user = userEvent.setup();
     const first = render(<JobsWorkspace />);
-    const firstRow = (
+    const firstCard = (
       await screen.findByRole('button', { name: /Product Engineer/ })
-    ).closest('tr')!;
-    await screen.findByRole('heading', { name: 'Formal deterministic score' });
+    ).closest('article')!;
+    await screen.findByRole('heading', { name: 'Why this job' });
     await user.click(
       within(screen.getByLabelText('Job detail')).getByRole('button', {
-        name: 'Shortlist',
+        name: 'Save',
       }),
     );
     expect(await screen.findByText('Fictional triage rejection.')).toBeTruthy();
-    expect(within(firstRow).getByText('new')).toBeTruthy();
+    expect(within(firstCard).getByText(/^new · open$/)).toBeTruthy();
 
     first.unmount();
     vi.stubGlobal('fetch', installFetch());
     render(<JobsWorkspace />);
-    await screen.findByRole('heading', { name: 'Formal deterministic score' });
+    await screen.findByRole('heading', { name: 'Why this job' });
     await user.click(
       within(screen.getByLabelText('Job detail')).getByRole('button', {
-        name: 'Shortlist',
+        name: 'Save',
       }),
     );
     await waitFor(() => expect(triageStatus).toBe('shortlisted'));
     cleanup();
     render(<JobsWorkspace />);
-    const reloadedRow = (
+    const reloadedCard = (
       await screen.findByRole('button', { name: /Product Engineer/ })
-    ).closest('tr')!;
-    expect(within(reloadedRow).getByText('shortlisted')).toBeTruthy();
+    ).closest('article')!;
+    expect(within(reloadedCard).getByText(/^shortlisted · open$/)).toBeTruthy();
   });
 
   it('keeps suggested scores separate and requires review explanations', async () => {
@@ -654,23 +698,25 @@ describe('JobsWorkspace', () => {
     vi.stubGlobal('fetch', fetchMock);
     const user = userEvent.setup();
     render(<JobsWorkspace />);
-    await screen.findByRole('heading', { name: 'Correction feedback' });
+    await screen.findByText('Detailed feedback');
+    await user.click(screen.getByText('Detailed feedback'));
 
     await user.type(screen.getByLabelText('Suggested score (optional)'), '70');
     await user.type(
       screen.getByLabelText('Reason', { selector: '.feedback-form textarea' }),
       'The fictional scope needs correction.',
     );
-    await user.click(screen.getByRole('button', { name: 'Append feedback' }));
+    await user.click(screen.getByRole('button', { name: 'Save feedback' }));
     await screen.findByText(/Correction feedback appended separately/);
     const feedbackCall = fetchMock.mock.calls.find(
       ([path]) => path === `/api/jobs/${jobId}/feedback`,
     );
     expect(String(feedbackCall?.[1]?.body)).toContain('"suggestedScore":70');
 
-    const reviewBox = screen.getByLabelText('Required explanation');
+    await user.click(screen.getByText('Needs correction'));
+    const reviewBox = screen.getByLabelText('What needs correction?');
     await user.type(reviewBox, 'The fictional extraction should be rechecked.');
-    await user.click(screen.getByRole('button', { name: 'Reject / needs correction' }));
+    await user.click(screen.getByRole('button', { name: 'Save correction request' }));
     await screen.findByText(/formal score was not changed/);
     expect(fetchMock).toHaveBeenCalledWith(
       `/api/jobs/${jobId}/review`,
@@ -704,7 +750,7 @@ describe('JobsWorkspace', () => {
     expect(screen.getByText(/fictional extraction was checked/)).toBeTruthy();
     expect(screen.getByText('Original listing URL is unavailable.')).toBeTruthy();
     expect(screen.getByText('Source URL is unavailable.')).toBeTruthy();
-    expect(screen.queryByRole('link', { name: /Open original listing/ })).toBeNull();
+    expect(screen.queryByRole('link', { name: /Open listing/ })).toBeNull();
   });
 
   it('labels a Gate failure without ever displaying it as a zero score', async () => {
@@ -757,5 +803,62 @@ describe('JobsWorkspace', () => {
     vi.stubGlobal('fetch', installFetch(summary, detail, { failList: true }));
     render(<JobsWorkspace />);
     expect(await screen.findByText('Fictional review network failure.')).toBeTruthy();
+  });
+  it('keeps failed feedback drafts and resets detail form state between jobs', async () => {
+    const user = userEvent.setup();
+    const onFeedback = vi.fn(async () => false);
+    const props = {
+      detail: detail(),
+      busy: false,
+      headingRef: { current: null },
+      onTriage: async () => {},
+      onRefresh: async () => {},
+      onRescore: async () => {},
+      onReview: async () => true,
+      onRetry: async () => true,
+      onFeedback,
+    };
+    const { rerender } = render(<JobDetailPanel key={jobId} {...props} />);
+    await user.click(screen.getByText('Detailed feedback', { selector: 'summary' }));
+    await user.type(
+      screen.getByRole('textbox', { name: 'Reason' }),
+      'Fictional correction',
+    );
+    await user.click(screen.getByRole('button', { name: 'Save feedback' }));
+    expect(onFeedback).toHaveBeenCalledWith({
+      type: 'job_specific',
+      reason: 'Fictional correction',
+    });
+    expect(
+      (
+        screen.getByRole('textbox', {
+          name: 'Reason',
+        }) as HTMLTextAreaElement
+      ).value,
+    ).toBe('Fictional correction');
+    onFeedback.mockResolvedValue(true);
+    await user.click(screen.getByRole('button', { name: 'Save feedback' }));
+    await waitFor(() =>
+      expect(
+        (
+          screen.getByRole('textbox', {
+            name: 'Reason',
+          }) as HTMLTextAreaElement
+        ).value,
+      ).toBe(''),
+    );
+    await user.type(
+      screen.getByRole('textbox', { name: 'Reason' }),
+      'Do not carry this to another job',
+    );
+    rerender(<JobDetailPanel key="another-job" {...props} />);
+    await user.click(screen.getByText('Detailed feedback', { selector: 'summary' }));
+    expect(
+      (
+        screen.getByRole('textbox', {
+          name: 'Reason',
+        }) as HTMLTextAreaElement
+      ).value,
+    ).toBe('');
   });
 });

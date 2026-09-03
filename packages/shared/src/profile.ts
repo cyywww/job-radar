@@ -411,23 +411,45 @@ export const profileVersionsResponseSchema = z
   .object({ versions: z.array(profileVersionSummarySchema) })
   .strict();
 
-export const updatePreferencesRequestSchema = z
+export const profileNameSchema = z.string().trim().min(1).max(80);
+
+export const profileSummarySchema = z
   .object({
-    baseVersion: z.number().int().positive(),
-    source: evidenceSourceInputSchema,
-    preferences: jobPreferencesFactInputSchema,
-    changeSummary: z.string().trim().min(1).max(240).default('Updated preferences'),
+    id: z.string().uuid(),
+    name: profileNameSchema,
+    isActive: z.boolean(),
+    version: z.number().int().positive(),
+    status: profileVersionStatusSchema,
+    headline: z.string().nullable(),
+    targetRoles: z.array(z.string()),
+    completeness: profileCompletenessSchema,
+    createdAt: z.string().datetime({ offset: true }),
+    updatedAt: z.string().datetime({ offset: true }),
   })
-  .strict()
-  .superRefine((value, context) => {
-    if (value.preferences.sourceId !== value.source.id) {
-      context.addIssue({
-        code: 'custom',
-        path: ['preferences', 'sourceId'],
-        message: 'Preferences must reference the supplied evidence source',
-      });
-    }
-  });
+  .strict();
+
+export const profilesResponseSchema = z
+  .object({ profiles: z.array(profileSummarySchema) })
+  .strict();
+
+export const profileResourceSchema = z
+  .object({ summary: profileSummarySchema, profile: profileSnapshotSchema })
+  .strict();
+
+export const createProfileResourceRequestSchema = z
+  .object({ name: profileNameSchema, profile: createProfileRequestSchema })
+  .strict();
+
+export const updateProfileResourceRequestSchema = z
+  .object({ name: profileNameSchema, profile: updateProfileRequestSchema })
+  .strict();
+
+export const deleteProfileResponseSchema = z
+  .object({
+    deletedId: z.string().uuid(),
+    activeProfileId: z.string().uuid().nullable(),
+  })
+  .strict();
 
 export const preferencesPreviewRequestSchema = z
   .object({
@@ -486,28 +508,22 @@ export const confirmedProfileViewSchema = z
   })
   .strict();
 
-export type ConfirmationStatus = z.infer<typeof confirmationStatusSchema>;
 export type EvidenceSourceInput = z.infer<typeof evidenceSourceInputSchema>;
-export type EvidenceSource = z.infer<typeof evidenceSourceSchema>;
 export type BasicFactInput = z.infer<typeof basicFactInputSchema>;
 export type WorkExperienceFactInput = z.infer<typeof workExperienceFactInputSchema>;
-export type EducationExperienceFactInput = z.infer<
-  typeof educationExperienceFactInputSchema
->;
 export type SkillFactInput = z.infer<typeof skillFactInputSchema>;
 export type LanguageFactInput = z.infer<typeof languageFactInputSchema>;
-export type CertificationFactInput = z.infer<typeof certificationFactInputSchema>;
 export type ProjectExperienceFactInput = z.infer<typeof projectExperienceFactInputSchema>;
 export type JobPreferencesData = z.infer<typeof jobPreferencesDataSchema>;
 export type JobPreferencesFactInput = z.infer<typeof jobPreferencesFactInputSchema>;
 export type CreateProfileRequest = z.infer<typeof createProfileRequestSchema>;
 export type UpdateProfileRequest = z.infer<typeof updateProfileRequestSchema>;
 export type ConfirmProfileRequest = z.infer<typeof confirmProfileRequestSchema>;
-export type UpdatePreferencesRequest = z.infer<typeof updatePreferencesRequestSchema>;
 export type PreferencesPreviewRequest = z.infer<typeof preferencesPreviewRequestSchema>;
 export type PreferencesPreviewResponse = z.infer<typeof preferencesPreviewResponseSchema>;
-export type ProfileImportRequest = z.infer<typeof profileImportRequestSchema>;
 export type ProfileImportResponse = z.infer<typeof profileImportResponseSchema>;
 export type ProfileSnapshot = z.infer<typeof profileSnapshotSchema>;
 export type ProfileVersionSummary = z.infer<typeof profileVersionSummarySchema>;
+export type ProfileSummary = z.infer<typeof profileSummarySchema>;
+export type ProfileResource = z.infer<typeof profileResourceSchema>;
 export type ConfirmedProfileView = z.infer<typeof confirmedProfileViewSchema>;

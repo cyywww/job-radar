@@ -29,6 +29,7 @@ import {
   jobScores,
   jobSnapshots,
   jobs,
+  profileVersions,
   scoringAttempts,
   scoringTasks,
 } from './schema.js';
@@ -117,6 +118,7 @@ export class ScoringRepository {
     includeClosed: boolean,
     now = new Date(),
     retryFailed = false,
+    profileId?: string,
   ): ScoringBackfillResult {
     const rows = this.client.db
       .select()
@@ -126,6 +128,7 @@ export class ScoringRepository {
       .filter((job) => includeClosed || job.active);
     let queued = 0;
     let invalidated = 0;
+    const ownedVersions = profileId ? this.profileVersionNumbers(profileId) : null;
     this.client.db.transaction((transaction) => {
       for (const job of rows) {
         const result = this.syncJobInTransaction(
@@ -135,6 +138,7 @@ export class ScoringRepository {
           versions,
           now,
           retryFailed,
+          ownedVersions,
         );
         queued += result.queued;
         invalidated += result.invalidated;
@@ -148,13 +152,22 @@ export class ScoringRepository {
     profileVersion: number,
     versions: ScoringVersions,
     now = new Date(),
+    profileId?: string,
   ): ScoringBackfillResult {
     const job = this.client.db.select().from(jobs).where(eq(jobs.id, jobId)).get();
     if (!job) {
       throw new ScoringRepositoryError('SCORING_JOB_NOT_FOUND', 'Job does not exist.');
     }
     return this.client.db.transaction((transaction) =>
-      this.syncJobInTransaction(transaction, job, profileVersion, versions, now, false),
+      this.syncJobInTransaction(
+        transaction,
+        job,
+        profileVersion,
+        versions,
+        now,
+        false,
+        profileId ? this.profileVersionNumbers(profileId) : null,
+      ),
     );
   }
 
@@ -163,6 +176,7 @@ export class ScoringRepository {
     profileVersion: number,
     versions: ScoringVersions,
     now = new Date(),
+    profileId?: string,
   ): ScoringTask {
     const job = this.client.db.select().from(jobs).where(eq(jobs.id, jobId)).get();
     if (!job?.currentSnapshotId) {
@@ -171,17 +185,32 @@ export class ScoringRepository {
         'Job or current snapshot does not exist.',
       );
     }
+    const ownedVersions = profileId ? this.profileVersionNumbers(profileId) : null;
     this.client.db.transaction((transaction) => {
       transaction
         .update(jobScores)
         .set({ invalidatedAt: now, updatedAt: now })
-        .where(and(eq(jobScores.jobId, jobId), isNull(jobScores.invalidatedAt)))
+        .where(
+          and(
+            eq(jobScores.jobId, jobId),
+            isNull(jobScores.invalidatedAt),
+            ownedVersions
+              ? inArray(jobScores.profileVersion, [...ownedVersions])
+              : undefined,
+          ),
+        )
         .run();
       transaction
         .update(jobRequirements)
         .set({ invalidatedAt: now })
         .where(
-          and(eq(jobRequirements.jobId, jobId), isNull(jobRequirements.invalidatedAt)),
+          and(
+            eq(jobRequirements.jobId, jobId),
+            isNull(jobRequirements.invalidatedAt),
+            ownedVersions
+              ? inArray(jobRequirements.profileVersion, [...ownedVersions])
+              : undefined,
+          ),
         )
         .run();
       const existing = transaction
@@ -236,6 +265,7 @@ export class ScoringRepository {
     profileVersion: number,
     versions: ScoringVersions,
     now = new Date(),
+    profileId?: string,
   ): ScoringTask[] {
     const selected = this.client.db
       .select()
@@ -251,18 +281,33 @@ export class ScoringRepository {
         'One or more jobs or current snapshots do not exist.',
       );
     }
+    const ownedVersions = profileId ? this.profileVersionNumbers(profileId) : null;
     this.client.db.transaction((transaction) => {
       for (const job of selected) {
         transaction
           .update(jobScores)
           .set({ invalidatedAt: now, updatedAt: now })
-          .where(and(eq(jobScores.jobId, job.id), isNull(jobScores.invalidatedAt)))
+          .where(
+            and(
+              eq(jobScores.jobId, job.id),
+              isNull(jobScores.invalidatedAt),
+              ownedVersions
+                ? inArray(jobScores.profileVersion, [...ownedVersions])
+                : undefined,
+            ),
+          )
           .run();
         transaction
           .update(jobRequirements)
           .set({ invalidatedAt: now })
           .where(
-            and(eq(jobRequirements.jobId, job.id), isNull(jobRequirements.invalidatedAt)),
+            and(
+              eq(jobRequirements.jobId, job.id),
+              isNull(jobRequirements.invalidatedAt),
+              ownedVersions
+                ? inArray(jobRequirements.profileVersion, [...ownedVersions])
+                : undefined,
+            ),
           )
           .run();
         const existing = transaction
@@ -321,19 +366,28 @@ export class ScoringRepository {
     });
   }
 
-  public listTasks(status: ScoringTaskStatus | undefined, limit: number): ScoringTask[] {
+  public listTasks(
+    status: ScoringTaskStatus | undefined,
+    limit: number,
+    profileVersion?: number,
+  ): ScoringTask[] {
     const parsedStatus = status ? scoringTaskStatusSchema.parse(status) : undefined;
     const rows = this.client.db
       .select()
       .from(scoringTasks)
-      .where(parsedStatus ? eq(scoringTasks.status, parsedStatus) : undefined)
+      .where(
+        and(
+          parsedStatus ? eq(scoringTasks.status, parsedStatus) : undefined,
+          profileVersion ? eq(scoringTasks.profileVersion, profileVersion) : undefined,
+        ),
+      )
       .orderBy(desc(scoringTasks.createdAt), desc(scoringTasks.id))
       .limit(limit)
       .all();
     return rows.map((row) => this.taskFromRow(row));
   }
 
-  public claimNext(now = new Date()): ClaimedScoringTask | null {
+  public claimNext(now = new Date(), profileVersion?: number): ClaimedScoringTask | null {
     return this.client.db.transaction((transaction) => {
       const row = transaction
         .select()
@@ -341,6 +395,7 @@ export class ScoringRepository {
         .where(
           and(
             eq(scoringTasks.status, 'pending'),
+            profileVersion ? eq(scoringTasks.profileVersion, profileVersion) : undefined,
             isNull(scoringTasks.invalidatedAt),
             sql`${scoringTasks.attemptCount} < ${scoringTasks.maxAttempts}`,
             or(isNull(scoringTasks.retryAt), lte(scoringTasks.retryAt, now)),
@@ -590,11 +645,16 @@ export class ScoringRepository {
     });
   }
 
-  public retry(taskId: string, now = new Date()): ScoringTask {
+  public retry(taskId: string, now = new Date(), profileVersion?: number): ScoringTask {
     const task = this.client.db
       .select()
       .from(scoringTasks)
-      .where(eq(scoringTasks.id, taskId))
+      .where(
+        and(
+          eq(scoringTasks.id, taskId),
+          profileVersion ? eq(scoringTasks.profileVersion, profileVersion) : undefined,
+        ),
+      )
       .get();
     if (!task) {
       throw new ScoringRepositoryError(
@@ -630,11 +690,21 @@ export class ScoringRepository {
     );
   }
 
-  public retryFailed(limit: number, now = new Date()): ScoringTask[] {
+  public retryFailed(
+    limit: number,
+    now = new Date(),
+    profileVersion?: number,
+  ): ScoringTask[] {
     const failed = this.client.db
       .select()
       .from(scoringTasks)
-      .where(and(eq(scoringTasks.status, 'failed'), isNull(scoringTasks.invalidatedAt)))
+      .where(
+        and(
+          eq(scoringTasks.status, 'failed'),
+          isNull(scoringTasks.invalidatedAt),
+          profileVersion ? eq(scoringTasks.profileVersion, profileVersion) : undefined,
+        ),
+      )
       .orderBy(asc(scoringTasks.updatedAt), asc(scoringTasks.id))
       .limit(limit)
       .all();
@@ -711,7 +781,10 @@ export class ScoringRepository {
     return running.length;
   }
 
-  public getJobHistory(jobId: string): {
+  public getJobHistory(
+    jobId: string,
+    profileId?: string | null,
+  ): {
     current: JobScore | null;
     requirements: JobRequirement[];
     scores: JobScore[];
@@ -723,29 +796,66 @@ export class ScoringRepository {
     ) {
       throw new ScoringRepositoryError('SCORING_JOB_NOT_FOUND', 'Job does not exist.');
     }
+    const ownedVersions =
+      profileId === undefined
+        ? null
+        : profileId === null
+          ? new Set<number>()
+          : this.profileVersionNumbers(profileId);
+    if (ownedVersions?.size === 0) {
+      return { current: null, requirements: [], scores: [], tasks: [], attempts: [] };
+    }
     const requirementRows = this.client.db
       .select()
       .from(jobRequirements)
-      .where(eq(jobRequirements.jobId, jobId))
+      .where(
+        and(
+          eq(jobRequirements.jobId, jobId),
+          ownedVersions
+            ? inArray(jobRequirements.profileVersion, [...ownedVersions])
+            : undefined,
+        ),
+      )
       .orderBy(desc(jobRequirements.createdAt), desc(jobRequirements.id))
       .all();
     const scoreRows = this.client.db
       .select()
       .from(jobScores)
-      .where(eq(jobScores.jobId, jobId))
+      .where(
+        and(
+          eq(jobScores.jobId, jobId),
+          ownedVersions
+            ? inArray(jobScores.profileVersion, [...ownedVersions])
+            : undefined,
+        ),
+      )
       .orderBy(desc(jobScores.createdAt), desc(jobScores.id))
       .all();
     const tasks = this.client.db
       .select()
       .from(scoringTasks)
-      .where(eq(scoringTasks.jobId, jobId))
+      .where(
+        and(
+          eq(scoringTasks.jobId, jobId),
+          ownedVersions
+            ? inArray(scoringTasks.profileVersion, [...ownedVersions])
+            : undefined,
+        ),
+      )
       .orderBy(desc(scoringTasks.createdAt), desc(scoringTasks.id))
       .all();
     const attempts = this.client.db
       .select({ attempt: scoringAttempts })
       .from(scoringAttempts)
       .innerJoin(scoringTasks, eq(scoringAttempts.taskId, scoringTasks.id))
-      .where(eq(scoringTasks.jobId, jobId))
+      .where(
+        and(
+          eq(scoringTasks.jobId, jobId),
+          ownedVersions
+            ? inArray(scoringTasks.profileVersion, [...ownedVersions])
+            : undefined,
+        ),
+      )
       .orderBy(desc(scoringAttempts.finishedAt), desc(scoringAttempts.id))
       .all();
     return {
@@ -768,6 +878,7 @@ export class ScoringRepository {
     versions: ScoringVersions,
     now: Date,
     retryFailed: boolean,
+    ownedVersions: ReadonlySet<number> | null,
   ): ScoringBackfillResult {
     if (!job.currentSnapshotId) return { queued: 0, invalidated: 0 };
     let invalidated = 0;
@@ -788,12 +899,13 @@ export class ScoringRepository {
       .all();
     const staleScores = currentScores.filter(
       (score) =>
-        score.snapshotId !== job.currentSnapshotId ||
-        score.profileVersion !== profileVersion ||
-        score.scoringVersion !== versions.scoringVersion ||
-        requirementExtractorVersions.get(score.requirementId) !==
-          versions.extractorVersion ||
-        score.jobActive !== job.active,
+        (!ownedVersions || ownedVersions.has(score.profileVersion)) &&
+        (score.snapshotId !== job.currentSnapshotId ||
+          score.profileVersion !== profileVersion ||
+          score.scoringVersion !== versions.scoringVersion ||
+          requirementExtractorVersions.get(score.requirementId) !==
+            versions.extractorVersion ||
+          score.jobActive !== job.active),
     );
     for (const score of staleScores) {
       transaction
@@ -805,9 +917,10 @@ export class ScoringRepository {
     }
     for (const requirement of requirements) {
       if (
-        requirement.snapshotId !== job.currentSnapshotId ||
-        requirement.profileVersion !== profileVersion ||
-        requirement.extractorVersion !== versions.extractorVersion
+        (!ownedVersions || ownedVersions.has(requirement.profileVersion)) &&
+        (requirement.snapshotId !== job.currentSnapshotId ||
+          requirement.profileVersion !== profileVersion ||
+          requirement.extractorVersion !== versions.extractorVersion)
       ) {
         transaction
           .update(jobRequirements)
@@ -824,6 +937,7 @@ export class ScoringRepository {
     for (const task of tasks) {
       if (
         task.invalidatedAt === null &&
+        (!ownedVersions || ownedVersions.has(task.profileVersion)) &&
         (task.snapshotId !== job.currentSnapshotId ||
           task.profileVersion !== profileVersion ||
           task.extractorVersion !== versions.extractorVersion ||
@@ -911,6 +1025,17 @@ export class ScoringRepository {
       })
       .onConflictDoNothing()
       .run();
+  }
+
+  private profileVersionNumbers(profileId: string): ReadonlySet<number> {
+    return new Set(
+      this.client.db
+        .select({ version: profileVersions.version })
+        .from(profileVersions)
+        .where(eq(profileVersions.profileId, profileId))
+        .all()
+        .map(({ version }) => version),
+    );
   }
 
   private findIdentityTask(

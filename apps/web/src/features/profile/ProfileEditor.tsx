@@ -147,9 +147,9 @@ function SearchSection({ draft, onChange }: EditorProps): React.JSX.Element {
     >
       <SectionHeading
         id="search-profile-heading"
-        step="01"
-        title="Quick setup"
-        description="One target role is enough to start. Location and skills make the results more useful."
+        step="Start here"
+        title="What are you looking for?"
+        description="A target role is enough to begin. Everything else can be added later."
         state={draft.preferences.confirmationStatus}
       />
       <div className="form-grid form-grid--two">
@@ -1225,13 +1225,29 @@ export function ProfileEditor({ draft, onChange }: EditorProps): React.JSX.Eleme
       <SearchSection draft={draft} onChange={onChange} />
       <details className="profile-disclosure profile-disclosure--section profile-advanced">
         <summary>
-          <span>Add details for better matching</span>
-          <small>Optional · eligibility, languages, experience and preferences</small>
+          <span>Optional details</span>
+          <small>Only add information that improves your matches</small>
         </summary>
         <div className="detail-body editor-stack editor-stack--advanced">
-          <FitSection draft={draft} onChange={onChange} />
-          <EligibilitySection draft={draft} onChange={onChange} />
-          <EvidenceSection draft={draft} onChange={onChange} />
+          <details className="profile-disclosure profile-disclosure--nested">
+            <summary>
+              <span>Language and eligibility</span>
+              <small>Useful when a role has location or permit requirements</small>
+            </summary>
+            <div className="detail-body editor-stack">
+              <FitSection draft={draft} onChange={onChange} />
+              <EligibilitySection draft={draft} onChange={onChange} />
+            </div>
+          </details>
+          <details className="profile-disclosure profile-disclosure--nested">
+            <summary>
+              <span>Work experience</span>
+              <small>Add evidence when you want more precise matching</small>
+            </summary>
+            <div className="detail-body">
+              <EvidenceSection draft={draft} onChange={onChange} />
+            </div>
+          </details>
           <OptionalFilters draft={draft} onChange={onChange} />
           <SupportingEvidence draft={draft} onChange={onChange} />
         </div>

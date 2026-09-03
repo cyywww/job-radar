@@ -5,11 +5,17 @@ import { join } from 'node:path';
 
 import { afterEach, describe, expect, it } from 'vitest';
 
-import { normalizedJobSchema, reviewJobsQuerySchema } from '@job-radar/shared';
+import {
+  createProfileRequestSchema,
+  normalizedJobSchema,
+  reviewJobsQuerySchema,
+} from '@job-radar/shared';
+import { createFictionalProfileInput } from '@job-radar/testing';
 
 import type { DatabaseClient } from './database.js';
 import { openDatabase, runMigrations } from './database.js';
 import { JobRepository } from './job-repository.js';
+import { ProfileRepository } from './profile-repository.js';
 import { ReviewRepository, ReviewRepositoryError } from './review-repository.js';
 
 let database: DatabaseClient | undefined;
@@ -23,6 +29,11 @@ function setup() {
   const directory = mkdtempSync(join(tmpdir(), 'job-radar-review-repository-'));
   database = openDatabase(join(directory, 'test.sqlite'));
   runMigrations(database);
+  const profiles = new ProfileRepository(database);
+  profiles.create(
+    'Fictional profile',
+    createProfileRequestSchema.parse(createFictionalProfileInput()),
+  );
   const jobs = new JobRepository(database);
   const source = jobs.ensureDefaultSources(new Date('2026-09-01T07:00:00.000Z'));
   const scan = jobs.createScan(1, [source], ['Fictional Engineer']);
@@ -51,7 +62,27 @@ function setup() {
     );
   const first = create('review-one', 'Fictional Product Engineer');
   const second = create('review-two', 'Fictional Platform Engineer');
-  return { jobs, review: new ReviewRepository(database), first, second };
+  return { jobs, profiles, review: new ReviewRepository(database), first, second };
+}
+
+function profileInputWithSource(sourceId: string) {
+  const fixture = createFictionalProfileInput();
+  const withSource = <T extends { sourceId: string }>(fact: T): T => ({
+    ...fact,
+    sourceId,
+  });
+  return createProfileRequestSchema.parse({
+    ...fixture,
+    sources: fixture.sources.map((source) => ({ ...source, id: sourceId })),
+    basics: withSource(fixture.basics),
+    workExperiences: fixture.workExperiences.map(withSource),
+    educationExperiences: fixture.educationExperiences.map(withSource),
+    skills: fixture.skills.map(withSource),
+    languages: fixture.languages.map(withSource),
+    certifications: fixture.certifications.map(withSource),
+    projects: fixture.projects.map(withSource),
+    preferences: withSource(fixture.preferences),
+  });
 }
 
 function insertFormalScore(
@@ -200,6 +231,28 @@ describe('ReviewRepository', () => {
     });
   });
 
+  it('shows only the selected profile score in opportunity views', () => {
+    const { profiles, review, first } = setup();
+    insertFormalScore(first.jobId, first.snapshotId);
+    const primary = profiles.getCurrent()!;
+    profiles.create(
+      'Backend roles',
+      profileInputWithSource('10000000-0000-4000-8000-000000000041'),
+    );
+
+    expect(
+      review
+        .listJobs(reviewJobsQuerySchema.parse({}))
+        .jobs.find(({ id }) => id === first.jobId)?.score.state,
+    ).toBe('unscored');
+    profiles.select(primary.id);
+    expect(
+      review
+        .listJobs(reviewJobsQuerySchema.parse({}))
+        .jobs.find(({ id }) => id === first.jobId)?.score.state,
+    ).toBe('review');
+  });
+
   it('sorts formal match and ranking scores independently through fixed columns', () => {
     const { review, first, second } = setup();
     insertFormalScore(first.jobId, first.snapshotId, 84, 95);
@@ -213,27 +266,6 @@ describe('ReviewRepository', () => {
     );
     expect(byMatch.jobs.map(({ id }) => id)).toEqual([second.jobId, first.jobId]);
     expect(byRanking.jobs.map(({ id }) => id)).toEqual([first.jobId, second.jobId]);
-  });
-
-  it('uses local midnight and the centralized strong-match threshold for Dashboard counts', () => {
-    const { review, first, second } = setup();
-    insertFormalScore(first.jobId, first.snapshotId);
-    const now = new Date(2026, 8, 1, 12, 0, 0, 0);
-    const localMidnight = new Date(2026, 8, 1, 0, 0, 0, 0);
-    database!.sqlite
-      .prepare('update jobs set first_seen_at = ? where id = ?')
-      .run(localMidnight.getTime() - 1, second.jobId);
-
-    expect(review.dashboardCounts(now)).toMatchObject({
-      todayBoundary: localMidnight,
-      newToday: 1,
-      strongMatches: 1,
-      pendingReview: 1,
-    });
-    database!.sqlite
-      .prepare('update job_scores set match_score = 79 where job_id = ?')
-      .run(first.jobId);
-    expect(review.dashboardCounts(now).strongMatches).toBe(0);
   });
 
   it('keeps correction feedback append-only and isolated from the formal score', () => {

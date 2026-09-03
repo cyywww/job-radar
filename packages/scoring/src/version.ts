@@ -10,5 +10,3 @@ export const SCORING_WEIGHTS = Object.freeze({
   location: 7,
   softPreferences: 5,
 });
-
-export const DEFAULT_REVIEW_CONFIDENCE = 0.65;

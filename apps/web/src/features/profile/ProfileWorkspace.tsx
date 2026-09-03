@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 
 import {
   createProfileRequestSchema,
@@ -6,16 +6,20 @@ import {
   type CreateProfileRequest,
   type ProfileImportResponse,
   type ProfileSnapshot,
+  type ProfileSummary,
   type ProfileVersionSummary,
 } from '@job-radar/shared';
 
 import {
   confirmProfile,
   createProfile,
+  deleteProfile,
   fetchProfile,
   fetchProfileVersions,
+  fetchProfiles,
   importPastedProfile,
   importProfileFile,
+  selectProfile,
   updateProfile,
 } from '../../api/profile.js';
 import { ProfileEditor } from './ProfileEditor.js';
@@ -42,6 +46,9 @@ function errorMessage(error: unknown): string {
 }
 
 export function ProfileWorkspace(): React.JSX.Element {
+  const [profiles, setProfiles] = useState<ProfileSummary[]>([]);
+  const [selectedProfileId, setSelectedProfileId] = useState<string | null>(null);
+  const [profileName, setProfileName] = useState('New profile');
   const [profile, setProfile] = useState<ProfileSnapshot | null>(null);
   const [draft, setDraft] = useState<CreateProfileRequest>(() =>
     createBlankProfileDraft(),
@@ -52,19 +59,59 @@ export function ProfileWorkspace(): React.JSX.Element {
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [dirty, setDirty] = useState(false);
+  const [confirmingDelete, setConfirmingDelete] = useState(false);
 
-  const refreshVersions = async () => setVersions(await fetchProfileVersions());
+  const refreshProfiles = useCallback(async () => {
+    setProfiles(await fetchProfiles());
+  }, []);
+
+  const showProfile = useCallback(async (profileId: string, select = false) => {
+    const resource = select
+      ? await selectProfile(profileId)
+      : await fetchProfile(profileId);
+    setSelectedProfileId(profileId);
+    setProfileName(resource.summary.name);
+    setProfile(resource.profile);
+    setDraft(snapshotToDraft(resource.profile));
+    setVersions(await fetchProfileVersions(profileId));
+    setDirty(false);
+    setConfirmingDelete(false);
+    return resource;
+  }, []);
+
+  const startNewProfile = () => {
+    setSelectedProfileId(null);
+    setProfileName(`New profile ${profiles.length + 1}`);
+    setProfile(null);
+    setDraft(createBlankProfileDraft());
+    setVersions([]);
+    setPasteText('');
+    setMessage(null);
+    setError(null);
+    setDirty(false);
+    setConfirmingDelete(false);
+  };
+
+  const canDiscardChanges = () =>
+    !dirty || window.confirm('Discard the unsaved changes to this profile?');
 
   useEffect(() => {
     let active = true;
     void (async () => {
       try {
-        const current = await fetchProfile();
+        const available = await fetchProfiles();
         if (!active) return;
-        setProfile(current);
+        setProfiles(available);
+        const current = available.find((item) => item.isActive) ?? available[0];
         if (current) {
-          setDraft(snapshotToDraft(current));
-          setVersions(await fetchProfileVersions());
+          await showProfile(current.id);
+        } else {
+          setSelectedProfileId(null);
+          setProfileName('New profile 1');
+          setProfile(null);
+          setDraft(createBlankProfileDraft());
+          setVersions([]);
         }
       } catch (loadError) {
         if (active) setError(errorMessage(loadError));
@@ -75,7 +122,7 @@ export function ProfileWorkspace(): React.JSX.Element {
     return () => {
       active = false;
     };
-  }, []);
+  }, [showProfile]);
 
   const applyImport = (result: ProfileImportResponse) => {
     if (profile) {
@@ -94,6 +141,7 @@ export function ProfileWorkspace(): React.JSX.Element {
     }
     setMessage(result.warnings.join(' '));
     setError(null);
+    setDirty(true);
   };
 
   const applyUserEdit = (next: CreateProfileRequest) => {
@@ -125,6 +173,27 @@ export function ProfileWorkspace(): React.JSX.Element {
       };
     }
     setDraft(adjusted);
+    setDirty(true);
+  };
+
+  const handleProfileSelection = async (profileId: string) => {
+    if (!profileId || profileId === selectedProfileId || !canDiscardChanges()) return;
+    setBusy(true);
+    setError(null);
+    setMessage(null);
+    try {
+      const resource = await showProfile(profileId, true);
+      await refreshProfiles();
+      setMessage(`“${resource.summary.name}” now drives job search and scoring.`);
+    } catch (selectionError) {
+      setError(errorMessage(selectionError));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const handleNewProfile = () => {
+    if (canDiscardChanges()) startNewProfile();
   };
 
   const handlePasteImport = async () => {
@@ -160,19 +229,23 @@ export function ProfileWorkspace(): React.JSX.Element {
     try {
       const saved = profile
         ? await updateProfile(
+            profile.id,
+            profileName,
             updateProfileRequestSchema.parse({
               ...draft,
               baseVersion: profile.version,
               changeSummary: 'Updated profile in browser',
             }),
           )
-        : await createProfile(createProfileRequestSchema.parse(draft));
-      setProfile(saved);
-      setDraft(snapshotToDraft(saved));
-      await refreshVersions();
-      setMessage(
-        `Saved as version ${saved.version}. Historical versions were preserved.`,
-      );
+        : await createProfile(profileName, createProfileRequestSchema.parse(draft));
+      setSelectedProfileId(saved.profile.id);
+      setProfileName(saved.summary.name);
+      setProfile(saved.profile);
+      setDraft(snapshotToDraft(saved.profile));
+      setVersions(await fetchProfileVersions(saved.profile.id));
+      await refreshProfiles();
+      setDirty(false);
+      setMessage(`“${saved.summary.name}” saved and selected.`);
     } catch (saveError) {
       setError(errorMessage(saveError));
     } finally {
@@ -186,20 +259,47 @@ export function ProfileWorkspace(): React.JSX.Element {
     setError(null);
     setMessage(null);
     try {
-      const confirmed = await confirmProfile({
+      const confirmed = await confirmProfile(profile.id, {
         baseVersion: profile.version,
         factIds: [],
         confirmAllPending: true,
         changeSummary: 'Confirmed reviewed profile facts in browser',
       });
-      setProfile(confirmed);
-      setDraft(snapshotToDraft(confirmed));
-      await refreshVersions();
-      setMessage(`Pending facts confirmed in new version ${confirmed.version}.`);
+      setProfile(confirmed.profile);
+      setDraft(snapshotToDraft(confirmed.profile));
+      setVersions(await fetchProfileVersions(profile.id));
+      await refreshProfiles();
+      setDirty(false);
+      setMessage('Imported facts confirmed.');
     } catch (confirmError) {
       setError(errorMessage(confirmError));
     } finally {
       setBusy(false);
+    }
+  };
+
+  const handleDeleteProfile = async () => {
+    if (!profile) return;
+    setBusy(true);
+    setError(null);
+    setMessage(null);
+    try {
+      const deletedName = profileName;
+      const result = await deleteProfile(profile.id);
+      const available = await fetchProfiles();
+      setProfiles(available);
+      if (result.activeProfileId) {
+        await showProfile(result.activeProfileId);
+        setMessage(`“${deletedName}” deleted. Another profile is now selected.`);
+      } else {
+        startNewProfile();
+        setMessage(`“${deletedName}” deleted. Create a profile to continue.`);
+      }
+    } catch (deleteError) {
+      setError(errorMessage(deleteError));
+    } finally {
+      setBusy(false);
+      setConfirmingDelete(false);
     }
   };
 
@@ -209,18 +309,86 @@ export function ProfileWorkspace(): React.JSX.Element {
     <div className="profile-page">
       <div className="page-heading profile-heading">
         <div>
-          <p className="eyebrow">Candidate profile</p>
-          <h1>Your profile</h1>
-          <p>
-            Start with one target role. Location and core skills are useful; every other
-            detail is optional.
-          </p>
+          <p className="eyebrow">Job search strategies</p>
+          <h1>Profiles</h1>
+          <p>Keep a focused profile for each kind of role you want to pursue.</p>
         </div>
         <div className="version-pill" aria-label="Current profile version">
-          <span>{profile ? `Version ${profile.version}` : 'Not saved'}</span>
-          <strong>{profile?.status ?? 'onboarding'}</strong>
+          <span>{profile ? 'Selected profile' : 'New profile'}</span>
+          <strong>
+            {profile?.status === 'confirmed'
+              ? profileName
+              : profile
+                ? 'Needs review'
+                : 'Not saved'}
+          </strong>
         </div>
       </div>
+
+      <section className="profile-manager" aria-labelledby="profile-manager-heading">
+        <div>
+          <h2 id="profile-manager-heading">Choose a profile</h2>
+          <p>The selected profile controls job searches, eligibility, and scores.</p>
+        </div>
+        <label className="profile-manager__select">
+          Profile
+          <select
+            value={selectedProfileId ?? ''}
+            disabled={busy || profiles.length === 0}
+            onChange={(event) => void handleProfileSelection(event.target.value)}
+          >
+            {!selectedProfileId ? <option value="">Unsaved profile</option> : null}
+            {profiles.map((item) => (
+              <option value={item.id} key={item.id}>
+                {item.name}
+                {item.isActive ? ' — selected' : ''}
+              </option>
+            ))}
+          </select>
+        </label>
+        <div className="profile-manager__actions">
+          <button
+            className="button button--secondary"
+            type="button"
+            disabled={busy}
+            onClick={handleNewProfile}
+          >
+            New profile
+          </button>
+          <button
+            className="text-button text-button--danger"
+            type="button"
+            disabled={busy || !profile}
+            onClick={() => setConfirmingDelete(true)}
+          >
+            Delete profile
+          </button>
+        </div>
+        {confirmingDelete && profile ? (
+          <div className="profile-delete-confirmation" role="alert">
+            <div>
+              <strong>Delete “{profileName}”?</strong>
+              <span>
+                Its profile data and scores will be removed. Jobs stay available.
+              </span>
+            </div>
+            <button
+              type="button"
+              disabled={busy}
+              onClick={() => void handleDeleteProfile()}
+            >
+              Delete permanently
+            </button>
+            <button
+              type="button"
+              disabled={busy}
+              onClick={() => setConfirmingDelete(false)}
+            >
+              Cancel
+            </button>
+          </div>
+        ) : null}
+      </section>
 
       <div aria-live="polite">
         {message && <p className="notice notice--success">{message}</p>}
@@ -231,15 +399,30 @@ export function ProfileWorkspace(): React.JSX.Element {
         )}
       </div>
 
+      <label className="profile-name-field">
+        <span>
+          Profile name <small>Required</small>
+        </span>
+        <input
+          value={profileName}
+          maxLength={80}
+          placeholder="Backend roles in Sweden"
+          onChange={(event) => {
+            setProfileName(event.target.value);
+            setDirty(true);
+          }}
+        />
+      </label>
+
       <ProfileEditor draft={draft} onChange={applyUserEdit} />
 
       <div className="save-bar">
         <div>
-          <strong>{profile ? 'Save a new version' : 'Create profile'}</strong>
+          <strong>{profile ? 'Save changes' : 'Finish setup'}</strong>
           <span>
             {profile
-              ? 'Your previous versions and evidence remain unchanged.'
-              : 'You can add optional details later.'}
+              ? 'This profile keeps its own history and scores.'
+              : 'Saving also selects this profile.'}
           </span>
         </div>
         <div>
@@ -259,16 +442,16 @@ export function ProfileWorkspace(): React.JSX.Element {
             disabled={busy}
             onClick={() => void save()}
           >
-            {busy ? 'Working…' : profile ? 'Save new version' : 'Create profile'}
+            {busy ? 'Working…' : profile ? 'Save changes' : 'Create profile'}
           </button>
         </div>
       </div>
 
       <details className="profile-disclosure profile-disclosure--section">
         <summary>
-          <span>Profile tools and history</span>
+          <span>Import and history</span>
           <small>
-            Optional import · {versions.length || 'no'} saved version
+            Optional · {versions.length || 'no'} saved version
             {versions.length === 1 ? '' : 's'}
           </small>
         </summary>

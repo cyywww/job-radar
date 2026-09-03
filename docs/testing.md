@@ -22,22 +22,29 @@ default suite never starts a real Codex CLI process.
   configuration upgrade, unsupported-source cleanup, deterministic cross-source matching,
   ambiguous no-merge, merge evidence, source-specific snapshots, changed fields,
   three-miss closure, reopening, partial-failure isolation, configuration versions,
-  duplicate-scan rejection, history-preserving reprocessing, sparse triage defaults,
+  duplicate-scan rejection, sparse triage defaults,
   idempotent single writes, atomic bulk writes/sparse exact undo, independent formal-score
   sorting, append-only correction feedback, review-state event history, formal-score
-  isolation, and populated M3-to-M4 preservation.
-- API tests use temporary migrated databases for Profile CRUD, JobTech scans, target-page
+  isolation, populated M3-to-M4 preservation, multiple named Profile selection and
+  independent version histories, selected-Profile score projection, cross-Profile scoring
+  isolation, Profile deletion cleanup, and populated singleton-to-multi-Profile migration.
+- API tests use temporary migrated databases for named multi-Profile CRUD/selection,
+  immutable per-Profile history, duplicate-name rejection, JobTech scans, target-page
   management, health/errors/metrics, source reruns, cancellation, partial source/detail
-  safety, lifecycle, duplicate scan protection, reprocessing, job audit responses,
-  Dashboard, bounded search/filter/sort, detail, triage/restore, bulk rescore, feedback,
+  safety, lifecycle, duplicate scan protection, job audit responses,
+  bounded search/filter/sort, detail, triage/restore, bulk rescore, feedback,
   review isolation, job refresh, persisted run stages/counts, SSE
   initial/progress/terminal state, disconnect cleanup, terminal reconnect, and SSE data
-  minimization.
-- React tests cover the minimal Profile onboarding/versioning path, creation from one
-  required target role plus optional location and recommended skills, the single collapsed
-  advanced-details group, and removal of routine provenance controls; Dashboard
-  metrics/top jobs/actions; Jobs table/card views,
-  filters/sort/save/restore/clear, formal match versus ranking, Gate failure versus zero,
+  minimization. Retired endpoints must return 404 with no aliases; Profile version URLs
+  cannot retrieve another Profile's versions. Facts and preferences share one versioned
+  resource update path.
+- React tests cover the three-destination navigation and minimal Profile
+  onboarding/versioning path; named Profile creation, editing, selection, and deletion;
+  creation from one required target role plus optional location and recommended skills;
+  nested optional-detail groups and removal of routine provenance controls;
+  card-first Opportunities with disclosed table
+  and batch modes, search, filters/sort/save/restore/clear, quick views, formal match versus
+  ranking, Gate failure versus zero,
   evidence/gaps/unknowns/version detail and review history, plain-text hostile JD and
   non-HTTP link rendering, optimistic triage/exact undo, keyboard focus, bulk actions,
   human review and suggested-score separation; and target-page
@@ -67,6 +74,11 @@ default suite never starts a real Codex CLI process.
   sponsorship, citizenship, location, remote scope, seniority, evidence depth, soft
   preferences, gaps, confidence, and unknowns.
 
+Shared HTTP-client tests cover headers, raw uploads, cancellation forwarding, empty
+responses, and validated/fallback error handling. Detail-form tests retain failed
+feedback drafts and reset them when selecting another job. Standalone Dashboard tests were removed
+with that feature; source controls are tested in their Settings-owned location.
+
 ## Commands
 
 ```bash
@@ -82,16 +94,23 @@ pnpm --filter @job-radar/scoring eval
 `pnpm check` runs lint, typecheck, tests, and build. Formatting remains an explicit
 non-mutating check.
 
-The 2026-09-01 acceptance run passed 168 tests across 31 files: 25 shared, 5 config,
-27 connector, 29 scoring, 30 database, 37 API, and 15 web tests. The separate
+The 2026-09-03 acceptance run passed 185 tests across 31 files: 24 shared, 5 config,
+27 connector, 29 scoring, 33 database, 50 API, and 17 web tests. The separate
 offline eval passed 34/34 cases. `pnpm lint`, formatting, typecheck, tests, build,
 `pnpm check`, diff checks, empty/M2/M3-populated migrations, SQLite integrity/foreign keys,
 and production-style loopback checks passed. No Playwright dependency or unused E2E
 scaffold was added; the core workflow is covered at repository, API integration, and React
-interaction boundaries. The Profile page was also exercised in the built application at
-desktop and 390 px widths with a disposable database and fictional inputs; only the three
-Quick setup fields were visible, advanced fields stayed collapsed, there was no horizontal
-overflow, and saving with only a target role created a durable immutable version.
+interaction boundaries. The local development preview and built application used only a
+disposable database. The Profile interaction test verifies that only the three initial
+fields are required for setup, and the Opportunities tests verify that advanced controls
+remain available without occupying the primary review surface.
+
+A one-off real-browser acceptance run used bundled Playwright with installed Chrome,
+a fresh browser session, and a disposable database. It verified Profile creation and
+selection, job detail, Save/Undo, Settings health, no JavaScript errors, and desktop/
+390px mobile layouts without horizontal overflow. No Playwright dependency or test
+scaffold was added to the project. The actual `pnpm start` command was also verified
+against a separate empty database on loopback port 18917 and stopped afterward.
 
 ## Migration checks
 
@@ -116,6 +135,9 @@ JOB_RADAR_DATABASE_PATH=/tmp/job-radar-migration/example.sqlite pnpm db:migrate
 - `0008_melted_purple_man.sql` rebuilds only `scoring_attempts` to add nullable actual-usage
   columns. The populated M3/M4 fixture proves old attempt byte/model/error/
   timestamp data survives and new usage fields remain null.
+- `0009_light_sleepwalker.sql` additively adds Profile name/selection columns and the
+  global Profile-version uniqueness index. A populated pre-migration singleton becomes
+  the selected `Primary profile`; its version and foreign-key relationships remain intact.
 
 Verify a migrated disposable database with:
 
@@ -144,9 +166,8 @@ curl --fail http://127.0.0.1:8787/
 curl --fail http://127.0.0.1:8787/api/health
 curl --fail http://127.0.0.1:8787/api/readiness
 curl --fail http://127.0.0.1:8787/api/sources
-curl --fail 'http://127.0.0.1:8787/api/jobs?active=all'
-curl --fail http://127.0.0.1:8787/api/dashboard
-curl --fail 'http://127.0.0.1:8787/api/review/jobs?sort=rankingScore&direction=desc'
+curl --fail http://127.0.0.1:8787/api/profiles
+curl --fail 'http://127.0.0.1:8787/api/jobs?includeClosed=true&sort=rankingScore&direction=desc'
 curl --fail 'http://127.0.0.1:8787/api/scoring/queue?limit=1'
 curl --fail http://127.0.0.1:8787/api/scoring/config
 ```

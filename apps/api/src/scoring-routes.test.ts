@@ -8,6 +8,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { getAppConfig } from '@job-radar/config';
 import {
   JobRepository,
+  ProfileRepository,
   openDatabase,
   runMigrations,
   type DatabaseClient,
@@ -18,12 +19,11 @@ import {
   type ExtractionRequest,
 } from '@job-radar/scoring';
 import {
-  dashboardResponseSchema,
   jobExtractionSchema,
   jobReviewDetailSchema,
   jobScoringHistorySchema,
   normalizedJobSchema,
-  profileSnapshotSchema,
+  profileResourceSchema,
   scoringBackfillResultSchema,
   scoringConfigurationSchema,
   scoringProcessResultSchema,
@@ -37,7 +37,7 @@ import {
 import { createFictionalProfileInput } from '@job-radar/testing';
 
 import { buildApp } from './app.js';
-import { getActiveScanEventConnections } from './routes/review.js';
+import { getActiveScanEventConnections } from './routes/jobs.js';
 
 type ProviderMode = 'success' | 'invalid_evidence' | 'gate_override';
 
@@ -259,8 +259,8 @@ beforeEach(async () => {
   });
   const profile = await app.inject({
     method: 'POST',
-    url: '/api/profile',
-    payload: createFictionalProfileInput(),
+    url: '/api/profiles',
+    payload: { name: 'Fictional profile', profile: createFictionalProfileInput() },
   });
   expect(profile.statusCode).toBe(201);
   jobId = seedJob();
@@ -321,7 +321,7 @@ describe('scoring API', () => {
     ).toEqual({ count: 0 });
   });
 
-  it('serves the M4 dashboard, review list/detail, triage, feedback, and review history', async () => {
+  it('serves the job list/detail, triage, feedback, and review history', async () => {
     await app.inject({ method: 'POST', url: '/api/scoring/backfill', payload: {} });
     await app.inject({
       method: 'POST',
@@ -329,17 +329,11 @@ describe('scoring API', () => {
       payload: { limit: 1 },
     });
 
-    const dashboard = dashboardResponseSchema.parse(
-      (await app.inject({ method: 'GET', url: '/api/dashboard' })).json(),
-    );
-    expect(dashboard.strongMatchThreshold).toBe(80);
-    expect(dashboard.topJobs[0]).toMatchObject({ id: jobId });
-
     const list = reviewJobsResponseSchema.parse(
       (
         await app.inject({
           method: 'GET',
-          url: '/api/review/jobs?search=TypeScript&sort=matchScore&direction=desc',
+          url: '/api/jobs?search=TypeScript&sort=matchScore&direction=desc',
         })
       ).json(),
     );
@@ -370,7 +364,7 @@ describe('scoring API', () => {
         await app.inject({
           method: 'GET',
           url:
-            `/api/review/jobs?search=TypeScript&triage=shortlisted` +
+            `/api/jobs?search=TypeScript&triage=shortlisted` +
             `&location=Stockholm&remoteMode=hybrid&company=Fictional%20Score` +
             `&sourceId=${sourceId}&lifecycle=open&gate=passed` +
             '&scoreStatus=scored&reviewState=not_required&includeClosed=false' +
@@ -436,7 +430,7 @@ describe('scoring API', () => {
     ).toEqual(formalBefore);
 
     const detail = jobReviewDetailSchema.parse(
-      (await app.inject({ method: 'GET', url: `/api/review/jobs/${jobId}` })).json(),
+      (await app.inject({ method: 'GET', url: `/api/jobs/${jobId}` })).json(),
     );
     expect(detail.currentScore?.reviewState).toBe('rejected');
     expect(detail.currentRequirement?.extraction.requiredSkills[0]?.name).toBe(
@@ -450,7 +444,7 @@ describe('scoring API', () => {
   it('validates bulk review operations and emits a persisted terminal SSE state', async () => {
     const invalidSort = await app.inject({
       method: 'GET',
-      url: '/api/review/jobs?sort=not-a-column',
+      url: '/api/jobs?sort=not-a-column',
     });
     expect(invalidSort.statusCode).toBe(400);
 
@@ -675,20 +669,24 @@ describe('scoring API', () => {
     ).toMatchObject({ count: 2 });
 
     const fixture = createFictionalProfileInput();
+    const profile = new ProfileRepository(database).getCurrent()!;
     const profileUpdate = await app.inject({
       method: 'PUT',
-      url: '/api/profile',
+      url: `/api/profiles/${profile.id}`,
       payload: {
-        ...fixture,
-        baseVersion: 1,
-        changeSummary: 'Fictional confirmed Profile update for invalidation',
-        basics: {
-          ...fixture.basics,
-          data: { ...fixture.basics.data, headline: 'Fictional scoring revision' },
+        name: 'Fictional profile',
+        profile: {
+          ...fixture,
+          baseVersion: 1,
+          changeSummary: 'Fictional confirmed Profile update for invalidation',
+          basics: {
+            ...fixture.basics,
+            data: { ...fixture.basics.data, headline: 'Fictional scoring revision' },
+          },
         },
       },
     });
-    expect(profileSnapshotSchema.parse(profileUpdate.json()).version).toBe(2);
+    expect(profileResourceSchema.parse(profileUpdate.json()).profile.version).toBe(2);
     history = jobScoringHistorySchema.parse(
       (await app.inject({ method: 'GET', url: `/api/jobs/${jobId}/scoring` })).json(),
     );

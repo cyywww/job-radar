@@ -218,9 +218,8 @@ and AI-assisted identity remain deferred until there is an explicit eval-backed 
 
 URL normalization removes credentials, fragments, default ports, and known tracking
 parameters, normalizes host/path, and sorts retained query parameters. Normalized full
-descriptions use a SHA-256 fingerprint. A controlled reprocessor can apply newer
-normalization to old Jobs and merge only disjoint-source candidates while retaining the
-same number of immutable snapshots.
+descriptions use a SHA-256 fingerprint. Historical reprocessing was removed by ADR-049; normalization now happens only in
+current ingestion, without a second repair/merge implementation.
 
 ## ADR-029: job state is the aggregate of source-link state
 
@@ -238,8 +237,8 @@ still observes the posting.
 Material source edits increment `config_version`, and each SourceRun captures the version
 used at queue time. A source-specific rerun creates a normal durable ScanRun against the
 current version, preserving prior run history. A partial unique SQLite index and
-transactional preflight enforce one queued/running scan across simultaneous requests, and
-job reprocessing refuses to start while a scan is active. This keeps retries and browser
+transactional preflight enforce one queued/running scan across simultaneous requests.
+This keeps retries and browser
 double-clicks from creating overlapping mutation tasks without introducing an external
 queue before its owning phase.
 
@@ -352,7 +351,7 @@ only bounded run/source status and safe error metadata, never descriptions, Prof
 headers, tokens, prompts, or raw responses. This does not introduce the M5 scheduler or
 resident process.
 
-## ADR-042: network refresh and historical reprocessing are distinct operations
+## ADR-042: network refresh and historical reprocessing are distinct operations (superseded by ADR-049)
 
 Job refresh creates an explicit one-source ScanRun and refetches the selected current
 source identity. Source rerun scans one source under its current configuration version.
@@ -362,7 +361,7 @@ reprocess from being presented as fresh upstream confirmation.
 
 ## ADR-043: the M4 browser uses native React and safe semantic rendering
 
-The Dashboard, review list, cards, detail sidebar, filters, dialogs/forms, live regions,
+The Opportunities list, cards, detail sidebar, filters, dialogs/forms, live regions,
 and responsive layouts use the existing React/CSS stack without a table, state, or UI
 framework. The complete posting is rendered only as text in `pre`; source HTML, raw
 metadata, model output, and prompts never enter an executable DOM path. External links
@@ -403,3 +402,54 @@ without copying its scheduler or AI workflow. The full shared Profile schema, im
 versions, stored provenance, completeness calculation, and confirmed-only M2/M3 boundary
 remain unchanged, so the simpler UI does not discard existing data or weaken scoring
 evidence rules.
+
+## ADR-047: daily review uses one progressive-disclosure workspace
+
+The primary browser navigation contains Opportunities, Profiles, and Settings. Daily
+metrics and job review are no longer separate destinations: Opportunities opens directly
+to a card-first review list with search and the all/new/saved/needs-review views. Advanced
+filters, sorting, table mode, saved-filter management, batch actions, audit calculations,
+AI usage, complete descriptions, and source/history data remain available through native
+disclosures. Sources and system health move under Settings because they are setup and
+diagnostic work, not part of reviewing every job.
+
+This is a presentation decision only. It does not delete the Dashboard read model, M4
+filters, bulk operations, audit evidence, immutable history, or source controls, and it
+does not change any API, database, scoring, AI, or confirmed-Profile boundary. The design
+borrows `job-scan`'s focus on a short daily flow while retaining Job Radar's deterministic
+Gate, formal scoring, explicit one-job AI action, and human-controlled review boundary.
+
+## ADR-048: one selected Profile scopes search and scoring without duplicating jobs
+
+Job Radar supports up to 20 uniquely named Profiles and selects exactly one whenever a
+saved Profile exists. A Profile represents one job-search strategy and owns its immutable
+facts, preferences, evidence sources, and version history. Numeric Profile versions are
+globally unique, allowing existing ScanRun, requirement, task, and score audit fields to
+remain unambiguous without a broad downstream schema rewrite.
+
+The selected Profile alone drives new scans, scoring work, score/review history, and the
+Opportunities score projection. Switching queues missing work for the selected version but
+does not invalidate or overwrite another Profile's results. Jobs, snapshots, sources,
+triage, and scan summaries remain global so the app does not duplicate collected listings.
+Deleting a Profile removes its candidate data and Profile-derived scoring/review records;
+retained scan summaries have their deleted Profile query terms scrubbed. If another
+Profile remains, the most recently updated fallback becomes selected and is synchronized
+against existing jobs.
+
+## ADR-049: one current implementation, no runtime compatibility layer
+
+The simplification pass removes the unused Dashboard stack, singleton Profile
+management, standalone preferences endpoints, duplicate raw job reads, and historical
+job reprocessing. Multi-Profile resources and the enriched job review model are the
+only current APIs; removed routes return 404, without redirects or adapters. This
+supersedes ADR-042's historical-reprocessing operation and earlier Dashboard plans.
+
+The selected confirmed candidate-data endpoint remains deliberately stable because it
+is the privacy boundary. SQLite migrations and immutable stored history are data
+integrity mechanisms, not runtime compatibility code, and are not deleted or rewritten.
+
+The Web has three feature directories: jobs, profile, and settings. Shared request
+handling replaces per-feature HTTP wrappers; filters/results/detail are separated from
+job orchestration, and detail forms own their state. Unused exports and obsolete CSS
+are removed instead of keeping alternate standalone-page modes. No new UI framework,
+dependencies, scheduler, or application workflow is added.

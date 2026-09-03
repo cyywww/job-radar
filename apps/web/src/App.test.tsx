@@ -6,7 +6,9 @@ import {
   computeProfileCompleteness,
   createProfileRequestSchema,
   type CreateProfileRequest,
+  type ProfileResource,
   type ProfileSnapshot,
+  type ProfileSummary,
 } from '@job-radar/shared';
 
 import App from './App.js';
@@ -20,7 +22,11 @@ function response(body: unknown, status = 200): Response {
   });
 }
 
-function snapshotFrom(input: CreateProfileRequest, version: number): ProfileSnapshot {
+function snapshotFrom(
+  input: CreateProfileRequest,
+  version: number,
+  profileId: string,
+): ProfileSnapshot {
   let factIndex = 1;
   const outputFact = <T extends { id?: string | undefined }>(fact: T) => ({
     ...fact,
@@ -48,7 +54,7 @@ function snapshotFrom(input: CreateProfileRequest, version: number): ProfileSnap
   ];
 
   return {
-    id: '40000000-0000-4000-8000-000000000001',
+    id: profileId,
     versionId: `50000000-0000-4000-8000-${String(version).padStart(12, '0')}`,
     version,
     status: allFacts.some((fact) => fact.confirmationStatus === 'pending')
@@ -77,15 +83,48 @@ function snapshotFrom(input: CreateProfileRequest, version: number): ProfileSnap
   };
 }
 
+function summaryFrom(
+  name: string,
+  profile: ProfileSnapshot,
+  isActive: boolean,
+): ProfileSummary {
+  return {
+    id: profile.id,
+    name,
+    isActive,
+    version: profile.version,
+    status: profile.status,
+    headline: profile.basics.data.headline ?? null,
+    targetRoles: profile.preferences.data.targetRoles,
+    completeness: profile.completeness,
+    createdAt: profile.createdAt,
+    updatedAt: profile.updatedAt,
+  };
+}
+
 afterEach(() => {
   cleanup();
   vi.unstubAllGlobals();
 });
 
 describe('profile onboarding browser flow', () => {
-  it('creates and edits a profile with preferences as immutable versions', async () => {
-    let current: ProfileSnapshot | null = null;
+  it('creates, edits, selects, and deletes named profiles', async () => {
+    const stored = new Map<
+      string,
+      { name: string; profile: ProfileSnapshot; history: ProfileSnapshot[] }
+    >();
+    let activeId: string | null = null;
+    let nextProfile = 1;
+    let nextVersion = 1;
     const savedRequests: Array<Record<string, unknown>> = [];
+
+    const resource = (id: string): ProfileResource => {
+      const item = stored.get(id)!;
+      return {
+        summary: summaryFrom(item.name, item.profile, id === activeId),
+        profile: item.profile,
+      };
+    };
 
     vi.stubGlobal(
       'fetch',
@@ -93,38 +132,60 @@ describe('profile onboarding browser flow', () => {
         const path = typeof input === 'string' ? input : input.toString();
         const method = init?.method ?? 'GET';
 
-        if (path === '/api/profile' && method === 'GET') {
-          return response({ error: { message: 'Profile does not exist' } }, 404);
-        }
-        if (path === '/api/profile' && method === 'POST') {
-          const body = createProfileRequestSchema.parse(JSON.parse(String(init?.body)));
-          savedRequests.push(body);
-          current = snapshotFrom(body, 1);
-          return response(current, 201);
-        }
-        if (path === '/api/profile' && method === 'PUT') {
-          const body = JSON.parse(String(init?.body)) as CreateProfileRequest & {
-            baseVersion: number;
-          };
-          savedRequests.push(body as unknown as Record<string, unknown>);
-          const profileInput = { ...body } as Partial<typeof body>;
-          delete profileInput.baseVersion;
-          current = snapshotFrom(createProfileRequestSchema.parse(profileInput), 2);
-          return response(current);
-        }
-        if (path === '/api/profile/versions') {
-          const count = current?.version ?? 0;
+        if (path === '/api/profiles' && method === 'GET') {
           return response({
-            versions: Array.from({ length: count }, (_item, index) => {
-              const version = count - index;
+            profiles: [...stored.entries()].map(([id, item]) =>
+              summaryFrom(item.name, item.profile, id === activeId),
+            ),
+          });
+        }
+        if (path === '/api/profiles' && method === 'POST') {
+          const request = JSON.parse(String(init?.body)) as {
+            name: string;
+            profile: unknown;
+          };
+          const body = createProfileRequestSchema.parse(request.profile);
+          savedRequests.push(request as unknown as Record<string, unknown>);
+          const id = `40000000-0000-4000-8000-${String(nextProfile++).padStart(12, '0')}`;
+          const profile = snapshotFrom(body, nextVersion++, id);
+          stored.set(id, { name: request.name, profile, history: [profile] });
+          activeId = id;
+          return response(resource(id), 201);
+        }
+        const profilePath = path.match(/^\/api\/profiles\/([^/]+)$/);
+        if (profilePath && method === 'GET') {
+          return response(resource(profilePath[1]!));
+        }
+        if (profilePath && method === 'PUT') {
+          const request = JSON.parse(String(init?.body)) as {
+            name: string;
+            profile: CreateProfileRequest & { baseVersion: number };
+          };
+          savedRequests.push(request as unknown as Record<string, unknown>);
+          const id = profilePath[1]!;
+          const profileInput = { ...request.profile } as Partial<typeof request.profile>;
+          delete profileInput.baseVersion;
+          const profile = snapshotFrom(
+            createProfileRequestSchema.parse(profileInput),
+            nextVersion++,
+            id,
+          );
+          const item = stored.get(id)!;
+          item.name = request.name;
+          item.profile = profile;
+          item.history.push(profile);
+          return response(resource(id));
+        }
+        const versionsPath = path.match(/^\/api\/profiles\/([^/]+)\/versions$/);
+        if (versionsPath && method === 'GET') {
+          const history = stored.get(versionsPath[1]!)?.history ?? [];
+          return response({
+            versions: [...history].reverse().map((profile) => {
               return {
-                versionId: `50000000-0000-4000-8000-${String(version).padStart(12, '0')}`,
-                version,
-                status: 'confirmed',
-                changeSummary:
-                  version === 1
-                    ? 'Created profile through onboarding'
-                    : 'Updated profile in browser',
+                versionId: profile.versionId,
+                version: profile.version,
+                status: profile.status,
+                changeSummary: profile.changeSummary,
                 confirmedFactCount: 2,
                 pendingFactCount: 0,
                 createdAt: timestamp,
@@ -132,53 +193,135 @@ describe('profile onboarding browser flow', () => {
             }),
           });
         }
+        const selectPath = path.match(/^\/api\/profiles\/([^/]+)\/select$/);
+        if (selectPath && method === 'POST') {
+          activeId = selectPath[1]!;
+          return response(resource(activeId));
+        }
+        if (profilePath && method === 'DELETE') {
+          const deletedId = profilePath[1]!;
+          stored.delete(deletedId);
+          activeId = stored.keys().next().value ?? null;
+          return response({ deletedId, activeProfileId: activeId });
+        }
+        if (path.startsWith('/api/jobs?')) {
+          return response({ jobs: [], total: 0, limit: 50, offset: 0 });
+        }
+        if (path === '/api/sources?includeDeleted=true') {
+          return response({ sources: [] });
+        }
+        if (path === '/api/scans?limit=10') {
+          return response({ scans: [] });
+        }
+        if (path === '/api/scoring/config') {
+          return response({ ready: false, provider: 'codex_cli', model: null });
+        }
+        if (path === '/api/health') {
+          return response({
+            status: 'ok',
+            service: 'job-radar-api',
+            version: '0.1.0',
+            timestamp,
+            api: { status: 'ok', uptimeSeconds: 5 },
+            database: { status: 'ok', latencyMs: 0.4 },
+          });
+        }
 
-        return response({ error: { message: `Unexpected ${method} ${path}` } }, 500);
+        return response(
+          {
+            error: {
+              code: 'TEST_ERROR',
+              requestId: 'test-request',
+              message: `Unexpected ${method} ${path}`,
+            },
+          },
+          500,
+        );
       }),
     );
 
     const user = userEvent.setup();
     render(<App />);
 
-    await user.click(screen.getByRole('button', { name: 'Profile' }));
-    await screen.findByRole('heading', { name: 'Your profile' });
-    expect(screen.getByRole('heading', { name: 'Quick setup' })).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Dashboard' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Jobs' })).toBeNull();
+    await user.click(screen.getByRole('button', { name: 'Profiles' }));
+    await screen.findByRole('heading', { name: 'Profiles' });
+    expect(
+      screen.getByRole('heading', { name: 'What are you looking for?' }),
+    ).toBeTruthy();
     expect(screen.queryByLabelText('Evidence source')).toBeNull();
-    const advancedDetails = screen
-      .getByText('Add details for better matching')
-      .closest('details');
+    const advancedDetails = screen.getByText('Optional details').closest('details');
     expect(advancedDetails?.hasAttribute('open')).toBe(false);
     expect(
       advancedDetails?.contains(screen.getByRole('heading', { name: 'Work evidence' })),
     ).toBe(true);
+    await user.clear(screen.getByRole('textbox', { name: /Profile name/ }));
+    await user.type(
+      screen.getByRole('textbox', { name: /Profile name/ }),
+      'Product roles',
+    );
     await user.type(screen.getByLabelText('Target roles'), 'Product Engineer');
     await user.type(screen.getByLabelText('Target locations'), 'Stockholm');
     await user.type(screen.getByLabelText('Core skills'), 'TypeScript\nSQL');
     await user.tab();
-    await user.click(screen.getByRole('button', { name: /^Create profile$/ }));
+    await user.click(screen.getByRole('button', { name: 'Create profile' }));
 
-    await screen.findByText(/Saved as version 1/);
+    await screen.findByText('“Product roles” saved and selected.');
     expect(savedRequests[0]).toMatchObject({
-      basics: { data: { displayName: '' }, confirmationStatus: 'confirmed' },
-      preferences: {
-        data: { targetRoles: ['Product Engineer'], targetLocations: ['Stockholm'] },
-        confirmationStatus: 'confirmed',
+      name: 'Product roles',
+      profile: {
+        basics: { data: { displayName: '' }, confirmationStatus: 'confirmed' },
+        preferences: {
+          data: { targetRoles: ['Product Engineer'], targetLocations: ['Stockholm'] },
+          confirmationStatus: 'confirmed',
+        },
+        skills: [
+          { data: { name: 'TypeScript', level: 'working' } },
+          { data: { name: 'SQL', level: 'working' } },
+        ],
       },
-      skills: [
-        { data: { name: 'TypeScript', level: 'working' } },
-        { data: { name: 'SQL', level: 'working' } },
-      ],
     });
 
-    await user.click(screen.getByText('Add details for better matching'));
+    await user.click(screen.getByText('Optional details'));
+    await user.click(screen.getByText('Language and eligibility'));
     await user.type(
       screen.getByLabelText('Professional headline'),
       'Fictional product engineer',
     );
-    await user.click(screen.getByRole('button', { name: 'Save new version' }));
+    await user.click(screen.getByRole('button', { name: 'Save changes' }));
 
-    await screen.findByText(/Saved as version 2/);
-    expect(savedRequests[1]).toMatchObject({ baseVersion: 1 });
+    await waitFor(() => expect(savedRequests).toHaveLength(2));
+    expect(screen.getByText('“Product roles” saved and selected.')).toBeTruthy();
+    expect(savedRequests[1]).toMatchObject({ profile: { baseVersion: 1 } });
     await waitFor(() => expect(screen.getByText(/2 saved versions/)).toBeTruthy());
+
+    await user.click(screen.getByRole('button', { name: 'New profile' }));
+    await user.clear(screen.getByRole('textbox', { name: /Profile name/ }));
+    await user.type(
+      screen.getByRole('textbox', { name: /Profile name/ }),
+      'Backend roles',
+    );
+    await user.type(screen.getByLabelText('Target roles'), 'Backend Engineer');
+    await user.click(screen.getByRole('button', { name: 'Create profile' }));
+    await screen.findByText('“Backend roles” saved and selected.');
+    expect((screen.getByLabelText('Profile') as HTMLSelectElement).value).toBe(
+      '40000000-0000-4000-8000-000000000002',
+    );
+
+    await user.selectOptions(screen.getByLabelText('Profile'), 'Product roles');
+    await screen.findByText('“Product roles” now drives job search and scoring.');
+    await user.click(screen.getByRole('button', { name: 'Delete profile' }));
+    expect(screen.getByText('Delete “Product roles”?')).toBeTruthy();
+    await user.click(screen.getByRole('button', { name: 'Delete permanently' }));
+    await screen.findByText('“Product roles” deleted. Another profile is now selected.');
+    expect(screen.queryByRole('option', { name: /Product roles/ })).toBeNull();
+
+    await user.click(screen.getByRole('button', { name: 'Settings' }));
+    expect(
+      await screen.findByRole('heading', { name: 'Sources and local status' }),
+    ).toBeTruthy();
+    await user.click(screen.getByRole('button', { name: 'System status' }));
+    expect(await screen.findByRole('heading', { name: 'App health' })).toBeTruthy();
   });
 });

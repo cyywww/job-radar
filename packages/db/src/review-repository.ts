@@ -3,7 +3,6 @@ import { randomUUID } from 'node:crypto';
 import { and, desc, eq, inArray, isNull } from 'drizzle-orm';
 
 import {
-  STRONG_MATCH_THRESHOLD,
   reviewJobSummarySchema,
   scoreFeedbackSchema,
   scoreReviewEventSchema,
@@ -23,6 +22,8 @@ import {
   jobScores,
   jobTriage,
   jobs,
+  profiles,
+  profileVersions,
   scoreFeedback,
   scoreReviewEvents,
 } from './schema.js';
@@ -121,6 +122,7 @@ export class ReviewRepository {
     limit: number;
     offset: number;
   } {
+    const activeProfileVersion = this.activeProfileVersion() ?? -1;
     const where: string[] = [];
     const values: Array<string | number> = [];
     if (!query.includeClosed) where.push('active = 1');
@@ -176,7 +178,7 @@ export class ReviewRepository {
           partition by js.job_id order by js.created_at desc, js.id desc
         ) as row_number
         from job_scores js
-        where js.invalidated_at is null
+        where js.invalidated_at is null and js.profile_version = ?
       ), current_scores as (
         select * from ranked_scores where row_number = 1
       ), ranked_tasks as (
@@ -184,7 +186,7 @@ export class ReviewRepository {
           partition by st.job_id order by st.updated_at desc, st.id desc
         ) as row_number
         from scoring_tasks st
-        where st.invalidated_at is null
+        where st.invalidated_at is null and st.profile_version = ?
       ), current_tasks as (
         select * from ranked_tasks where row_number = 1
       ), source_summary as (
@@ -251,7 +253,13 @@ export class ReviewRepository {
       order by (${sortColumn} is null) asc, ${sortColumn} ${direction}, id asc
       limit ? offset ?
     `);
-    const rows = statement.all(...values, query.limit, query.offset) as ReviewListRow[];
+    const rows = statement.all(
+      activeProfileVersion,
+      activeProfileVersion,
+      ...values,
+      query.limit,
+      query.offset,
+    ) as ReviewListRow[];
     return {
       jobs: rows.map((row) => this.summaryFromRow(row)),
       total: rows[0]?.total_count ?? this.countJobs(query),
@@ -388,13 +396,18 @@ export class ReviewRepository {
 
   public listFeedback(jobId: string): ScoreFeedback[] {
     this.requireJob(jobId);
+    const versions = this.activeProfileVersions();
+    if (versions.length === 0) return [];
     return this.client.db
-      .select()
+      .select({ feedback: scoreFeedback })
       .from(scoreFeedback)
-      .where(eq(scoreFeedback.jobId, jobId))
+      .innerJoin(jobScores, eq(scoreFeedback.scoreId, jobScores.id))
+      .where(
+        and(eq(scoreFeedback.jobId, jobId), inArray(jobScores.profileVersion, versions)),
+      )
       .orderBy(desc(scoreFeedback.createdAt), desc(scoreFeedback.id))
       .all()
-      .map((row) => this.feedbackFromRow(row));
+      .map(({ feedback }) => this.feedbackFromRow(feedback));
   }
 
   public createFeedback(
@@ -425,13 +438,21 @@ export class ReviewRepository {
 
   public listReviewEvents(jobId: string): ScoreReviewEvent[] {
     this.requireJob(jobId);
+    const versions = this.activeProfileVersions();
+    if (versions.length === 0) return [];
     return this.client.db
-      .select()
+      .select({ event: scoreReviewEvents })
       .from(scoreReviewEvents)
-      .where(eq(scoreReviewEvents.jobId, jobId))
+      .innerJoin(jobScores, eq(scoreReviewEvents.scoreId, jobScores.id))
+      .where(
+        and(
+          eq(scoreReviewEvents.jobId, jobId),
+          inArray(jobScores.profileVersion, versions),
+        ),
+      )
       .orderBy(desc(scoreReviewEvents.createdAt), desc(scoreReviewEvents.id))
       .all()
-      .map((row) => this.reviewEventFromRow(row));
+      .map(({ event }) => this.reviewEventFromRow(event));
   }
 
   public updateReviewState(
@@ -491,71 +512,6 @@ export class ReviewRepository {
     );
   }
 
-  public dashboardCounts(now = new Date()): {
-    todayBoundary: Date;
-    newToday: number;
-    strongMatches: number;
-    pendingScoring: number;
-    pendingReview: number;
-    closed: number;
-  } {
-    const todayBoundary = new Date(
-      now.getFullYear(),
-      now.getMonth(),
-      now.getDate(),
-      0,
-      0,
-      0,
-      0,
-    );
-    const row = this.client.sqlite
-      .prepare(
-        `with current_scores as (
-          select js.* from job_scores js
-          where js.invalidated_at is null
-            and not exists (
-              select 1 from job_scores newer
-              where newer.job_id = js.job_id and newer.invalidated_at is null
-                and (newer.created_at > js.created_at or
-                  (newer.created_at = js.created_at and newer.id > js.id))
-            )
-        ), current_tasks as (
-          select st.* from scoring_tasks st
-          where st.invalidated_at is null
-            and not exists (
-              select 1 from scoring_tasks newer
-              where newer.job_id = st.job_id and newer.invalidated_at is null
-                and (newer.updated_at > st.updated_at or
-                  (newer.updated_at = st.updated_at and newer.id > st.id))
-            )
-        )
-        select
-          (select count(*) from jobs where first_seen_at >= ?) as new_today,
-          (select count(*) from current_scores cs inner join jobs j on j.id = cs.job_id
-            where j.active = 1 and cs.eligible = 1 and cs.match_score >= ?) as strong_matches,
-          (select count(*) from current_tasks where status in ('pending', 'running'))
-            as pending_scoring,
-          (select count(*) from current_scores where review_state = 'pending')
-            as pending_review,
-          (select count(*) from jobs where active = 0) as closed`,
-      )
-      .get(todayBoundary.getTime(), STRONG_MATCH_THRESHOLD) as {
-      new_today: number;
-      strong_matches: number;
-      pending_scoring: number;
-      pending_review: number;
-      closed: number;
-    };
-    return {
-      todayBoundary,
-      newToday: row.new_today,
-      strongMatches: row.strong_matches,
-      pendingScoring: row.pending_scoring,
-      pendingReview: row.pending_review,
-      closed: row.closed,
-    };
-  }
-
   private countJobs(query: ReviewJobsQuery): number {
     if (query.offset === 0) return 0;
     return this.listJobs({ ...query, offset: 0, limit: 1 }).total;
@@ -570,12 +526,45 @@ export class ReviewRepository {
   }
 
   private currentScore(jobId: string): typeof jobScores.$inferSelect | undefined {
+    const activeProfileVersion = this.activeProfileVersion();
+    if (activeProfileVersion === null) return undefined;
     return this.client.db
       .select()
       .from(jobScores)
-      .where(and(eq(jobScores.jobId, jobId), isNull(jobScores.invalidatedAt)))
+      .where(
+        and(
+          eq(jobScores.jobId, jobId),
+          eq(jobScores.profileVersion, activeProfileVersion),
+          isNull(jobScores.invalidatedAt),
+        ),
+      )
       .orderBy(desc(jobScores.createdAt), desc(jobScores.id))
       .get();
+  }
+
+  private activeProfileVersion(): number | null {
+    return (
+      this.client.db
+        .select({ version: profiles.currentVersion })
+        .from(profiles)
+        .where(eq(profiles.isActive, true))
+        .get()?.version ?? null
+    );
+  }
+
+  private activeProfileVersions(): number[] {
+    const active = this.client.db
+      .select({ id: profiles.id })
+      .from(profiles)
+      .where(eq(profiles.isActive, true))
+      .get();
+    if (!active) return [];
+    return this.client.db
+      .select({ version: profileVersions.version })
+      .from(profileVersions)
+      .where(eq(profileVersions.profileId, active.id))
+      .all()
+      .map(({ version }) => version);
   }
 
   private summaryFromRow(row: ReviewListRow): ReviewJobSummary {

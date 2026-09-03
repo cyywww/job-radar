@@ -12,8 +12,6 @@ export const errorResponseSchema = z
   })
   .strict();
 
-export type ErrorResponse = z.infer<typeof errorResponseSchema>;
-
 export class AppError extends Error {
   public readonly code: string;
   public readonly statusCode: number;

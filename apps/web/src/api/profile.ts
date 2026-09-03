@@ -1,104 +1,91 @@
 import {
-  confirmedProfileViewSchema,
+  deleteProfileResponseSchema,
   profileImportResponseSchema,
-  profileSnapshotSchema,
+  profileResourceSchema,
+  profilesResponseSchema,
   profileVersionsResponseSchema,
-  type ConfirmedProfileView,
   type ConfirmProfileRequest,
   type CreateProfileRequest,
   type ProfileImportResponse,
-  type ProfileSnapshot,
+  type ProfileResource,
+  type ProfileSummary,
   type ProfileVersionSummary,
   type UpdateProfileRequest,
 } from '@job-radar/shared';
 
-export class ProfileApiError extends Error {
-  constructor(
-    readonly status: number,
-    message: string,
-  ) {
-    super(message);
-    this.name = 'ProfileApiError';
-  }
+import { requestJson, request } from './request.js';
+
+export async function fetchProfiles(): Promise<ProfileSummary[]> {
+  return profilesResponseSchema.parse(await requestJson('/api/profiles')).profiles;
 }
 
-async function parseError(response: Response): Promise<ProfileApiError> {
-  const body = (await response.json().catch(() => null)) as {
-    error?: { message?: string };
-  } | null;
-  return new ProfileApiError(
-    response.status,
-    body?.error?.message ?? `Request failed with HTTP ${response.status}`,
-  );
-}
-
-async function requestJson(path: string, init: RequestInit = {}): Promise<unknown> {
-  const response = await fetch(path, {
-    ...init,
-    headers: {
-      accept: 'application/json',
-      ...(init.body ? { 'content-type': 'application/json' } : {}),
-      ...init.headers,
-    },
-  });
-  if (!response.ok) throw await parseError(response);
-  return response.json();
-}
-
-export async function fetchProfile(): Promise<ProfileSnapshot | null> {
-  try {
-    return profileSnapshotSchema.parse(await requestJson('/api/profile'));
-  } catch (error) {
-    if (error instanceof ProfileApiError && error.status === 404) return null;
-    throw error;
-  }
+export async function fetchProfile(profileId: string): Promise<ProfileResource> {
+  return profileResourceSchema.parse(await requestJson(`/api/profiles/${profileId}`));
 }
 
 export async function createProfile(
-  input: CreateProfileRequest,
-): Promise<ProfileSnapshot> {
-  return profileSnapshotSchema.parse(
-    await requestJson('/api/profile', {
+  name: string,
+  profile: CreateProfileRequest,
+): Promise<ProfileResource> {
+  return profileResourceSchema.parse(
+    await requestJson('/api/profiles', {
       method: 'POST',
-      body: JSON.stringify(input),
+      body: JSON.stringify({ name, profile }),
     }),
   );
 }
 
 export async function updateProfile(
-  input: UpdateProfileRequest,
-): Promise<ProfileSnapshot> {
-  return profileSnapshotSchema.parse(
-    await requestJson('/api/profile', {
+  profileId: string,
+  name: string,
+  profile: UpdateProfileRequest,
+): Promise<ProfileResource> {
+  return profileResourceSchema.parse(
+    await requestJson(`/api/profiles/${profileId}`, {
       method: 'PUT',
-      body: JSON.stringify(input),
+      body: JSON.stringify({ name, profile }),
     }),
   );
 }
 
+export async function selectProfile(profileId: string): Promise<ProfileResource> {
+  return profileResourceSchema.parse(
+    await requestJson(`/api/profiles/${profileId}/select`, { method: 'POST' }),
+  );
+}
+
+export async function deleteProfile(profileId: string): Promise<{
+  deletedId: string;
+  activeProfileId: string | null;
+}> {
+  return deleteProfileResponseSchema.parse(
+    await requestJson(`/api/profiles/${profileId}`, { method: 'DELETE' }),
+  );
+}
+
 export async function confirmProfile(
+  profileId: string,
   input: ConfirmProfileRequest,
-): Promise<ProfileSnapshot> {
-  return profileSnapshotSchema.parse(
-    await requestJson('/api/profile/confirm', {
+): Promise<ProfileResource> {
+  return profileResourceSchema.parse(
+    await requestJson(`/api/profiles/${profileId}/confirm`, {
       method: 'POST',
       body: JSON.stringify(input),
     }),
   );
 }
 
-export async function fetchProfileVersions(): Promise<ProfileVersionSummary[]> {
-  return profileVersionsResponseSchema.parse(await requestJson('/api/profile/versions'))
-    .versions;
-}
-
-export async function fetchConfirmedProfile(): Promise<ConfirmedProfileView> {
-  return confirmedProfileViewSchema.parse(await requestJson('/api/profile/confirmed'));
+export async function fetchProfileVersions(
+  profileId: string,
+): Promise<ProfileVersionSummary[]> {
+  return profileVersionsResponseSchema.parse(
+    await requestJson(`/api/profiles/${profileId}/versions`),
+  ).versions;
 }
 
 export async function importPastedProfile(text: string): Promise<ProfileImportResponse> {
   return profileImportResponseSchema.parse(
-    await requestJson('/api/profile/import', {
+    await requestJson('/api/profiles/import', {
       method: 'POST',
       body: JSON.stringify({
         sourceType: 'pasted_text',
@@ -110,7 +97,7 @@ export async function importPastedProfile(text: string): Promise<ProfileImportRe
 }
 
 export async function importProfileFile(file: File): Promise<ProfileImportResponse> {
-  const response = await fetch('/api/profile/import/file', {
+  const response = await request('/api/profiles/import/file', {
     method: 'POST',
     headers: {
       accept: 'application/json',
@@ -119,6 +106,5 @@ export async function importProfileFile(file: File): Promise<ProfileImportRespon
     },
     body: file,
   });
-  if (!response.ok) throw await parseError(response);
   return profileImportResponseSchema.parse(await response.json());
 }

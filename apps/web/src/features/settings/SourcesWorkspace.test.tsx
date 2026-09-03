@@ -184,7 +184,16 @@ describe('SourcesWorkspace', () => {
           });
           return response(null, 204);
         }
-        return response({ error: { message: `Unexpected ${method} ${path}` } }, 500);
+        return response(
+          {
+            error: {
+              code: 'TEST_ERROR',
+              requestId: 'test-request',
+              message: `Unexpected ${method} ${path}`,
+            },
+          },
+          500,
+        );
       },
     );
     vi.stubGlobal('fetch', fetchMock);
@@ -226,6 +235,6 @@ describe('SourcesWorkspace', () => {
     expect(
       screen.queryByRole('button', { name: 'Edit Northstar engineering' }),
     ).toBeNull();
-    expect(screen.getAllByText('JobTech / Platsbanken')).toHaveLength(2);
+    expect(screen.getAllByText('JobTech / Platsbanken')).toHaveLength(1);
   });
 });

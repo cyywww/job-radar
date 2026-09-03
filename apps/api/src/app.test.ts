@@ -7,11 +7,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { getAppConfig } from '@job-radar/config';
 import { openDatabase, runMigrations } from '@job-radar/db';
-import {
-  dashboardResponseSchema,
-  errorResponseSchema,
-  healthResponseSchema,
-} from '@job-radar/shared';
+import { errorResponseSchema, healthResponseSchema } from '@job-radar/shared';
 
 import { buildApp } from './app.js';
 
@@ -64,9 +60,25 @@ describe('operational routes', () => {
     expect(payload.error.code).toBe('NOT_FOUND');
   });
 
-  it('reports the explicit no-Profile Dashboard state', async () => {
-    const response = await app.inject({ method: 'GET', url: '/api/dashboard' });
-    expect(response.statusCode).toBe(200);
-    expect(dashboardResponseSchema.parse(response.json()).profileReady).toBe(false);
+  it.each([
+    ['GET', '/api/dashboard'],
+    ['GET', '/api/profile'],
+    ['POST', '/api/profile'],
+    ['PUT', '/api/profile'],
+    ['POST', '/api/profile/confirm'],
+    ['GET', '/api/profile/versions'],
+    ['GET', '/api/profile/versions/1'],
+    ['GET', '/api/preferences'],
+    ['PUT', '/api/preferences'],
+    ['POST', '/api/preferences/preview'],
+    ['POST', '/api/profile/import'],
+    ['POST', '/api/profile/import/file'],
+    ['GET', '/api/review/jobs'],
+    ['GET', '/api/review/jobs/10000000-0000-4000-8000-000000000001'],
+    ['POST', '/api/jobs/reprocess'],
+  ] as const)('does not retain retired %s %s', async (method, url) => {
+    const response = await app.inject({ method, url });
+    expect(response.statusCode).toBe(404);
+    expect(errorResponseSchema.parse(response.json()).error.code).toBe('NOT_FOUND');
   });
 });

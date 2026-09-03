@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 
-import { and, asc, desc, eq } from 'drizzle-orm';
+import { and, asc, desc, eq, inArray, ne } from 'drizzle-orm';
 
 import {
   basicFactSchema,
@@ -11,6 +11,7 @@ import {
   jobPreferencesFactSchema,
   languageFactSchema,
   profileSnapshotSchema,
+  profileSummarySchema,
   projectExperienceFactSchema,
   skillFactSchema,
   workExperienceFactSchema,
@@ -20,19 +21,29 @@ import {
   type EvidenceSourceInput,
   type JobPreferencesFactInput,
   type ProfileSnapshot,
+  type ProfileSummary,
   type ProfileVersionSummary,
-  type UpdatePreferencesRequest,
   type UpdateProfileRequest,
 } from '@job-radar/shared';
 
 import type { DatabaseClient } from './database.js';
 import {
+  jobRequirements,
+  jobScores,
   profileEvidenceSources,
   profileFacts,
   profilePreferences,
   profiles,
   profileVersions,
+  scanRuns,
+  scoreFeedback,
+  scoreReviewEvents,
+  scoringAttempts,
+  scoringTasks,
+  sourceRuns,
 } from './schema.js';
+
+const PROFILE_LIMIT = 20;
 
 type FactKind =
   | 'basics'
@@ -55,8 +66,9 @@ type SnapshotFact =
 type ProfileUpdateContent = Omit<UpdateProfileRequest, 'baseVersion' | 'changeSummary'>;
 
 export type ProfileStoreErrorCode =
-  | 'PROFILE_EXISTS'
   | 'PROFILE_NOT_FOUND'
+  | 'PROFILE_NAME_EXISTS'
+  | 'PROFILE_LIMIT_REACHED'
   | 'PROFILE_VERSION_NOT_FOUND'
   | 'PROFILE_VERSION_CONFLICT'
   | 'PROFILE_REFERENCE_INVALID';
@@ -188,60 +200,94 @@ function allInputFacts(input: CreateProfileRequest | UpdateProfileRequest) {
 export class ProfileRepository {
   constructor(private readonly client: DatabaseClient) {}
 
+  listProfiles(): ProfileSummary[] {
+    return this.client.db
+      .select()
+      .from(profiles)
+      .orderBy(desc(profiles.isActive), desc(profiles.updatedAt), asc(profiles.name))
+      .all()
+      .map((profile) => this.summaryFromRecord(profile));
+  }
+
   getCurrent(): ProfileSnapshot | null {
-    const profile = this.client.db.select().from(profiles).limit(1).get();
+    const profile = this.activeRecord();
     return profile ? this.loadVersion(profile.id, profile.currentVersion) : null;
   }
 
-  getVersion(version: number): ProfileSnapshot | null {
-    const profile = this.client.db.select().from(profiles).limit(1).get();
-    return profile ? this.loadVersion(profile.id, version) : null;
+  get(profileId: string): ProfileSnapshot | null {
+    const profile = this.client.db
+      .select()
+      .from(profiles)
+      .where(eq(profiles.id, profileId))
+      .get();
+    return profile ? this.loadVersion(profile.id, profile.currentVersion) : null;
   }
 
-  create(input: CreateProfileRequest): ProfileSnapshot {
-    if (this.client.db.select({ id: profiles.id }).from(profiles).limit(1).get()) {
-      throw new ProfileStoreError('PROFILE_EXISTS', 'A profile already exists');
+  getVersion(profileId: string, version: number): ProfileSnapshot | null {
+    return this.loadVersion(profileId, version);
+  }
+
+  create(name: string, input: CreateProfileRequest): ProfileSnapshot {
+    this.assertNameAvailable(name);
+    if (
+      this.client.db.select({ id: profiles.id }).from(profiles).all().length >=
+      PROFILE_LIMIT
+    ) {
+      throw new ProfileStoreError(
+        'PROFILE_LIMIT_REACHED',
+        `A maximum of ${PROFILE_LIMIT} profiles is supported`,
+      );
     }
 
     const now = new Date();
     const profileId = randomUUID();
     const versionId = randomUUID();
+    const version = this.nextGlobalVersion();
 
     this.client.sqlite.transaction(() => {
+      this.client.db.update(profiles).set({ isActive: false }).run();
       this.client.db
         .insert(profiles)
         .values({
           id: profileId,
-          currentVersion: 1,
+          name,
+          isActive: true,
+          currentVersion: version,
           currentVersionId: versionId,
           createdAt: now,
           updatedAt: now,
         })
         .run();
-      this.persistVersion(profileId, versionId, 1, input, now);
+      this.persistVersion(profileId, versionId, version, input, now);
     })();
 
-    return this.requireVersion(profileId, 1);
+    return this.requireVersion(profileId, version);
   }
 
-  update(input: UpdateProfileRequest): ProfileSnapshot {
-    const profile = this.requireCurrentRecord();
+  update(profileId: string, name: string, input: UpdateProfileRequest): ProfileSnapshot {
+    const profile = this.requireRecord(profileId);
     if (profile.currentVersion !== input.baseVersion) {
       throw new ProfileStoreError(
         'PROFILE_VERSION_CONFLICT',
         `Profile is at version ${profile.currentVersion}; reload before saving`,
       );
     }
+    this.assertNameAvailable(name, profileId);
 
     const now = new Date();
-    const nextVersion = profile.currentVersion + 1;
+    const nextVersion = this.nextGlobalVersion();
     const versionId = randomUUID();
 
     this.client.sqlite.transaction(() => {
       this.persistVersion(profile.id, versionId, nextVersion, input, now);
       this.client.db
         .update(profiles)
-        .set({ currentVersion: nextVersion, currentVersionId: versionId, updatedAt: now })
+        .set({
+          name,
+          currentVersion: nextVersion,
+          currentVersionId: versionId,
+          updatedAt: now,
+        })
         .where(eq(profiles.id, profile.id))
         .run();
     })();
@@ -249,8 +295,8 @@ export class ProfileRepository {
     return this.requireVersion(profile.id, nextVersion);
   }
 
-  confirm(input: ConfirmProfileRequest): ProfileSnapshot {
-    const current = this.requireCurrent();
+  confirm(profileId: string, input: ConfirmProfileRequest): ProfileSnapshot {
+    const current = this.requireProfile(profileId);
     if (current.version !== input.baseVersion) {
       throw new ProfileStoreError(
         'PROFILE_VERSION_CONFLICT',
@@ -294,7 +340,7 @@ export class ProfileRepository {
         ? { ...fact, confirmationStatus: 'confirmed' }
         : fact) as T;
 
-    return this.update({
+    return this.update(profileId, this.requireRecord(profileId).name, {
       ...content,
       baseVersion: input.baseVersion,
       changeSummary: input.changeSummary,
@@ -309,23 +355,8 @@ export class ProfileRepository {
     });
   }
 
-  updatePreferences(input: UpdatePreferencesRequest): ProfileSnapshot {
-    const current = this.requireCurrent();
-    const content = snapshotToUpdateContent(current);
-    const sourceMap = new Map(content.sources.map((source) => [source.id, source]));
-    sourceMap.set(input.source.id, input.source);
-
-    return this.update({
-      ...content,
-      baseVersion: input.baseVersion,
-      changeSummary: input.changeSummary,
-      sources: [...sourceMap.values()],
-      preferences: input.preferences,
-    });
-  }
-
-  listVersions(): ProfileVersionSummary[] {
-    const profile = this.requireCurrentRecord();
+  listVersions(profileId: string): ProfileVersionSummary[] {
+    const profile = this.requireRecord(profileId);
     const versions = this.client.db
       .select()
       .from(profileVersions)
@@ -361,7 +392,8 @@ export class ProfileRepository {
   }
 
   getConfirmedView(version?: number): ConfirmedProfileView | null {
-    const current = version === undefined ? this.getCurrent() : this.getVersion(version);
+    const current =
+      version === undefined ? this.getCurrent() : this.loadGlobalVersion(version);
     if (!current) return null;
 
     return {
@@ -391,20 +423,208 @@ export class ProfileRepository {
     };
   }
 
-  private requireCurrent(): ProfileSnapshot {
-    const current = this.getCurrent();
+  select(profileId: string): ProfileSnapshot {
+    const profile = this.requireRecord(profileId);
+    if (!profile.isActive) {
+      const now = new Date();
+      this.client.sqlite.transaction(() => {
+        this.client.db.update(profiles).set({ isActive: false }).run();
+        this.client.db
+          .update(profiles)
+          .set({ isActive: true, updatedAt: now })
+          .where(eq(profiles.id, profileId))
+          .run();
+      })();
+    }
+    return this.requireProfile(profileId);
+  }
+
+  delete(profileId: string): { deletedId: string; activeProfileId: string | null } {
+    const profile = this.requireRecord(profileId);
+    const versions = this.client.db
+      .select({ version: profileVersions.version })
+      .from(profileVersions)
+      .where(eq(profileVersions.profileId, profileId))
+      .all()
+      .map(({ version }) => version);
+    const fallback = profile.isActive
+      ? this.client.db
+          .select()
+          .from(profiles)
+          .where(ne(profiles.id, profileId))
+          .orderBy(desc(profiles.updatedAt), asc(profiles.name))
+          .get()
+      : this.activeRecord();
+
+    this.client.sqlite.transaction(() => {
+      if (profile.isActive) {
+        this.client.db
+          .update(profiles)
+          .set({ isActive: false })
+          .where(eq(profiles.id, profileId))
+          .run();
+        if (fallback) {
+          this.client.db
+            .update(profiles)
+            .set({ isActive: true, updatedAt: new Date() })
+            .where(eq(profiles.id, fallback.id))
+            .run();
+        }
+      }
+
+      if (versions.length > 0) {
+        const taskIds = this.client.db
+          .select({ id: scoringTasks.id })
+          .from(scoringTasks)
+          .where(inArray(scoringTasks.profileVersion, versions))
+          .all()
+          .map(({ id }) => id);
+        const scoreIds = this.client.db
+          .select({ id: jobScores.id })
+          .from(jobScores)
+          .where(inArray(jobScores.profileVersion, versions))
+          .all()
+          .map(({ id }) => id);
+        const scanIds = this.client.db
+          .select({ id: scanRuns.id })
+          .from(scanRuns)
+          .where(inArray(scanRuns.profileVersion, versions))
+          .all()
+          .map(({ id }) => id);
+
+        if (scoreIds.length > 0) {
+          this.client.db
+            .delete(scoreReviewEvents)
+            .where(inArray(scoreReviewEvents.scoreId, scoreIds))
+            .run();
+          this.client.db
+            .delete(scoreFeedback)
+            .where(inArray(scoreFeedback.scoreId, scoreIds))
+            .run();
+        }
+        if (taskIds.length > 0) {
+          this.client.db
+            .delete(scoringAttempts)
+            .where(inArray(scoringAttempts.taskId, taskIds))
+            .run();
+        }
+        this.client.db
+          .delete(jobScores)
+          .where(inArray(jobScores.profileVersion, versions))
+          .run();
+        this.client.db
+          .delete(jobRequirements)
+          .where(inArray(jobRequirements.profileVersion, versions))
+          .run();
+        this.client.db
+          .delete(scoringTasks)
+          .where(inArray(scoringTasks.profileVersion, versions))
+          .run();
+        if (scanIds.length > 0) {
+          this.client.db
+            .update(sourceRuns)
+            .set({ queries: [] })
+            .where(inArray(sourceRuns.scanRunId, scanIds))
+            .run();
+        }
+      }
+
+      this.client.db
+        .delete(profileVersions)
+        .where(eq(profileVersions.profileId, profileId))
+        .run();
+      this.client.db
+        .delete(profileEvidenceSources)
+        .where(eq(profileEvidenceSources.profileId, profileId))
+        .run();
+      this.client.db.delete(profiles).where(eq(profiles.id, profileId)).run();
+    })();
+
+    return { deletedId: profileId, activeProfileId: fallback?.id ?? null };
+  }
+
+  getSummary(profileId: string): ProfileSummary {
+    return this.summaryFromRecord(this.requireRecord(profileId));
+  }
+
+  private requireProfile(profileId: string): ProfileSnapshot {
+    const current = this.get(profileId);
     if (!current) {
       throw new ProfileStoreError('PROFILE_NOT_FOUND', 'Profile does not exist');
     }
     return current;
   }
 
-  private requireCurrentRecord(): typeof profiles.$inferSelect {
-    const profile = this.client.db.select().from(profiles).limit(1).get();
+  private requireRecord(profileId: string): typeof profiles.$inferSelect {
+    const profile = this.client.db
+      .select()
+      .from(profiles)
+      .where(eq(profiles.id, profileId))
+      .get();
     if (!profile) {
       throw new ProfileStoreError('PROFILE_NOT_FOUND', 'Profile does not exist');
     }
     return profile;
+  }
+
+  private activeRecord(): typeof profiles.$inferSelect | undefined {
+    return this.client.db
+      .select()
+      .from(profiles)
+      .where(eq(profiles.isActive, true))
+      .get();
+  }
+
+  private assertNameAvailable(name: string, profileId?: string): void {
+    const existing = this.client.db
+      .select({ id: profiles.id })
+      .from(profiles)
+      .where(eq(profiles.name, name))
+      .get();
+    if (existing && existing.id !== profileId) {
+      throw new ProfileStoreError(
+        'PROFILE_NAME_EXISTS',
+        `A profile named “${name}” already exists`,
+      );
+    }
+  }
+
+  private nextGlobalVersion(): number {
+    const latest = this.client.sqlite
+      .prepare(
+        `select max(version) as version from (
+          select version from profile_versions
+          union all
+          select profile_version as version from scan_runs
+        )`,
+      )
+      .get() as { version: number | null };
+    return (latest?.version ?? 0) + 1;
+  }
+
+  private loadGlobalVersion(version: number): ProfileSnapshot | null {
+    const record = this.client.db
+      .select({ profileId: profileVersions.profileId })
+      .from(profileVersions)
+      .where(eq(profileVersions.version, version))
+      .get();
+    return record ? this.loadVersion(record.profileId, version) : null;
+  }
+
+  private summaryFromRecord(profile: typeof profiles.$inferSelect): ProfileSummary {
+    const snapshot = this.requireVersion(profile.id, profile.currentVersion);
+    return profileSummarySchema.parse({
+      id: profile.id,
+      name: profile.name,
+      isActive: profile.isActive,
+      version: snapshot.version,
+      status: snapshot.status,
+      headline: snapshot.basics.data.headline ?? null,
+      targetRoles: snapshot.preferences.data.targetRoles,
+      completeness: snapshot.completeness,
+      createdAt: iso(profile.createdAt),
+      updatedAt: iso(profile.updatedAt),
+    });
   }
 
   private requireVersion(profileId: string, version: number): ProfileSnapshot {

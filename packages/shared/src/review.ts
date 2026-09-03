@@ -5,7 +5,7 @@ import {
   jobSummarySchema,
   remoteModeSchema,
   scanRunSchema,
-  sourceHealthStatusSchema,
+  runStageSchema,
 } from './jobs.js';
 import {
   jobRequirementSchema,
@@ -16,7 +16,6 @@ import {
   scoringTaskStatusSchema,
 } from './scoring.js';
 
-export const STRONG_MATCH_THRESHOLD = 80;
 export const SAVED_JOB_FILTERS_VERSION = 1;
 
 export const triageStatusSchema = z.enum(['new', 'shortlisted', 'ignored', 'archived']);
@@ -294,53 +293,10 @@ export const refreshJobResponseSchema = z
   .object({ scan: scanRunSchema, jobId: z.string().uuid() })
   .strict();
 
-export const dashboardSourceHealthSchema = z
-  .object({
-    id: z.string().uuid(),
-    name: z.string().min(1),
-    enabled: z.boolean(),
-    healthStatus: sourceHealthStatusSchema,
-    lastSuccessAt: z.string().datetime({ offset: true }).nullable(),
-    lastError: z.string().max(500).nullable(),
-  })
-  .strict();
-
-export const dashboardResponseSchema = z
-  .object({
-    generatedAt: z.string().datetime({ offset: true }),
-    todayBoundary: z.string().datetime({ offset: true }),
-    profileReady: z.boolean(),
-    strongMatchThreshold: z.literal(STRONG_MATCH_THRESHOLD),
-    counts: z
-      .object({
-        newToday: z.number().int().nonnegative(),
-        strongMatches: z.number().int().nonnegative(),
-        pendingScoring: z.number().int().nonnegative(),
-        pendingReview: z.number().int().nonnegative(),
-        closed: z.number().int().nonnegative(),
-      })
-      .strict(),
-    sources: z.array(dashboardSourceHealthSchema),
-    latestScan: scanRunSchema.nullable(),
-    topJobs: z.array(reviewJobSummarySchema).max(10),
-  })
-  .strict();
-
-export const scanPhaseSchema = z.enum([
-  'queued',
-  'health',
-  'discovery',
-  'detail',
-  'persist',
-  'lifecycle',
-  'scoring',
-  'complete',
-]);
-
 export const scanEventSchema = z
   .object({
     scan: scanRunSchema,
-    phase: scanPhaseSchema,
+    phase: runStageSchema,
     terminal: z.boolean(),
     emittedAt: z.string().datetime({ offset: true }),
   })
@@ -372,8 +328,6 @@ export const savedJobFiltersSchema = z
 
 export type TriageStatus = z.infer<typeof triageStatusSchema>;
 export type TriageRecord = z.infer<typeof triageRecordSchema>;
-export type UpdateTriageRequest = z.infer<typeof updateTriageRequestSchema>;
-export type BulkTriageRequest = z.infer<typeof bulkTriageRequestSchema>;
 export type JobScoreSummary = z.infer<typeof jobScoreSummarySchema>;
 export type ReviewJobSummary = z.infer<typeof reviewJobSummarySchema>;
 export type ReviewJobsQuery = z.infer<typeof reviewJobsQuerySchema>;
@@ -382,6 +336,3 @@ export type CreateFeedbackRequest = z.infer<typeof createFeedbackRequestSchema>;
 export type ScoreFeedback = z.infer<typeof scoreFeedbackSchema>;
 export type ScoreReviewEvent = z.infer<typeof scoreReviewEventSchema>;
 export type JobReviewDetail = z.infer<typeof jobReviewDetailSchema>;
-export type DashboardResponse = z.infer<typeof dashboardResponseSchema>;
-export type ScanEvent = z.infer<typeof scanEventSchema>;
-export type SavedJobFilters = z.infer<typeof savedJobFiltersSchema>;

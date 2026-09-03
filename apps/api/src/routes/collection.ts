@@ -1,0 +1,140 @@
+import type { FastifyInstance } from 'fastify';
+import { z } from 'zod';
+
+import { SourceRepositoryError } from '@job-radar/db';
+import {
+  AppError,
+  createSourceRequestSchema,
+  createScanRequestSchema,
+  scanRunSchema,
+  scansQuerySchema,
+  scansResponseSchema,
+  sourceTestResultSchema,
+  sourceViewSchema,
+  sourcesResponseSchema,
+  updateSourceRequestSchema,
+} from '@job-radar/shared';
+
+import { ScanCoordinator, ScanCoordinatorError } from '../services/scan-coordinator.js';
+
+const idParamsSchema = z.object({ id: z.string().uuid() }).strict();
+const sourcesQuerySchema = z
+  .object({ includeDeleted: z.enum(['true', 'false']).default('false') })
+  .strict();
+
+function mapCoordinatorError(error: unknown): never {
+  if (!(error instanceof ScanCoordinatorError)) throw error;
+  const statusCode =
+    error.code === 'SCAN_NOT_FOUND'
+      ? 404
+      : error.code === 'SCAN_ALREADY_RUNNING' || error.code === 'SCAN_NOT_CANCELLABLE'
+        ? 409
+        : 400;
+  throw new AppError(error.code, error.message, statusCode);
+}
+
+function mapSourceError(error: unknown): never {
+  if (!(error instanceof SourceRepositoryError)) throw error;
+  const statusCode =
+    error.code === 'SOURCE_NOT_FOUND'
+      ? 404
+      : error.code === 'SOURCE_CONFLICT'
+        ? 409
+        : 400;
+  throw new AppError(error.code, error.message, statusCode);
+}
+
+export async function registerCollectionRoutes(
+  app: FastifyInstance,
+  coordinator: ScanCoordinator,
+): Promise<void> {
+  app.get('/api/sources', async (request) => {
+    const query = sourcesQuerySchema.parse(request.query);
+    return sourcesResponseSchema.parse({
+      sources: coordinator.listSources(query.includeDeleted === 'true'),
+    });
+  });
+
+  app.post('/api/sources', async (request, reply) => {
+    try {
+      const source = coordinator.createSource(
+        createSourceRequestSchema.parse(request.body),
+      );
+      return reply.status(201).send(sourceViewSchema.parse(source));
+    } catch (error) {
+      return mapSourceError(error);
+    }
+  });
+
+  app.patch('/api/sources/:id', async (request) => {
+    try {
+      const { id } = idParamsSchema.parse(request.params);
+      return sourceViewSchema.parse(
+        coordinator.updateSource(id, updateSourceRequestSchema.parse(request.body)),
+      );
+    } catch (error) {
+      return mapSourceError(error);
+    }
+  });
+
+  app.delete('/api/sources/:id', async (request, reply) => {
+    try {
+      const { id } = idParamsSchema.parse(request.params);
+      coordinator.deleteSource(id);
+      return reply.status(204).send();
+    } catch (error) {
+      return mapSourceError(error);
+    }
+  });
+
+  app.post('/api/sources/:id/test', async (request) => {
+    try {
+      const { id } = idParamsSchema.parse(request.params);
+      return sourceTestResultSchema.parse(await coordinator.testSource(id));
+    } catch (error) {
+      return mapSourceError(error);
+    }
+  });
+
+  app.post('/api/sources/:id/rerun', async (request, reply) => {
+    try {
+      const { id } = idParamsSchema.parse(request.params);
+      const run = coordinator.start({ sourceIds: [id] });
+      return reply.status(202).send(scanRunSchema.parse(run));
+    } catch (error) {
+      return mapCoordinatorError(error);
+    }
+  });
+
+  app.post('/api/scans', async (request, reply) => {
+    try {
+      const run = coordinator.start(createScanRequestSchema.parse(request.body ?? {}));
+      return reply.status(202).send(scanRunSchema.parse(run));
+    } catch (error) {
+      return mapCoordinatorError(error);
+    }
+  });
+
+  app.get('/api/scans', async (request) => {
+    const query = scansQuerySchema.parse(request.query);
+    return scansResponseSchema.parse({ scans: coordinator.list(query.limit) });
+  });
+
+  app.get('/api/scans/:id', async (request) => {
+    try {
+      const { id } = idParamsSchema.parse(request.params);
+      return scanRunSchema.parse(coordinator.get(id));
+    } catch (error) {
+      return mapCoordinatorError(error);
+    }
+  });
+
+  app.post('/api/scans/:id/cancel', async (request) => {
+    try {
+      const { id } = idParamsSchema.parse(request.params);
+      return scanRunSchema.parse(coordinator.cancel(id));
+    } catch (error) {
+      return mapCoordinatorError(error);
+    }
+  });
+}

@@ -38,6 +38,7 @@ function setup() {
   runMigrations(database);
   const profiles = new ProfileRepository(database);
   const profile = profiles.create(
+    'Fictional profile',
     createProfileRequestSchema.parse(createFictionalProfileInput()),
   );
   const confirmed = profiles.getConfirmedView()!;
@@ -211,6 +212,26 @@ const tokenAudit = {
   totalTokens: 1_250,
 } as const;
 
+function profileInputWithSource(sourceId: string) {
+  const fixture = createFictionalProfileInput();
+  const withSource = <T extends { sourceId: string }>(fact: T): T => ({
+    ...fact,
+    sourceId,
+  });
+  return createProfileRequestSchema.parse({
+    ...fixture,
+    sources: fixture.sources.map((source) => ({ ...source, id: sourceId })),
+    basics: withSource(fixture.basics),
+    workExperiences: fixture.workExperiences.map(withSource),
+    educationExperiences: fixture.educationExperiences.map(withSource),
+    skills: fixture.skills.map(withSource),
+    languages: fixture.languages.map(withSource),
+    certifications: fixture.certifications.map(withSource),
+    projects: fixture.projects.map(withSource),
+    preferences: withSource(fixture.preferences),
+  });
+}
+
 function completeFixtureScore(
   scoring: ScoringRepository,
   confirmed: ConfirmedProfileView,
@@ -300,6 +321,45 @@ describe('ScoringRepository', () => {
     expect(history.attempts[0]).toMatchObject({
       usage: tokenAudit,
       outputBytes: 2_048,
+    });
+  });
+
+  it('preserves another profile score while queueing and deleting the selected profile', () => {
+    const { profiles, confirmed, scoring, ingested } = setup();
+    completeFixtureScore(scoring, confirmed);
+    const second = profiles.create(
+      'Backend roles',
+      profileInputWithSource('10000000-0000-4000-8000-000000000031'),
+    );
+
+    expect(
+      scoring.syncAll(
+        second.version,
+        versions,
+        false,
+        new Date('2026-09-01T10:00:00.000Z'),
+        false,
+        second.id,
+      ),
+    ).toEqual({ queued: 1, invalidated: 0 });
+    expect(
+      scoring.getJobHistory(ingested.jobId, confirmed.profileId).current,
+    ).not.toBeNull();
+    expect(scoring.getJobHistory(ingested.jobId, second.id)).toMatchObject({
+      current: null,
+      tasks: [{ profileVersion: second.version, status: 'pending' }],
+    });
+
+    profiles.delete(second.id);
+    expect(
+      scoring.getJobHistory(ingested.jobId, confirmed.profileId).current,
+    ).not.toBeNull();
+    expect(scoring.getJobHistory(ingested.jobId, second.id)).toEqual({
+      current: null,
+      requirements: [],
+      scores: [],
+      tasks: [],
+      attempts: [],
     });
   });
 

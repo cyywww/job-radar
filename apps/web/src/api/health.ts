@@ -1,19 +1,9 @@
 import { healthResponseSchema, type HealthResponse } from '@job-radar/shared';
 
+import { requestJson } from './request.js';
+
 export async function fetchHealth(signal?: AbortSignal): Promise<HealthResponse> {
-  const request: RequestInit = {
-    headers: { accept: 'application/json' },
-  };
-
-  if (signal) {
-    request.signal = signal;
-  }
-
-  const response = await fetch('/api/health', request);
-
-  if (!response.ok) {
-    throw new Error(`Health request failed with HTTP ${response.status}`);
-  }
-
-  return healthResponseSchema.parse(await response.json());
+  return healthResponseSchema.parse(
+    await requestJson('/api/health', signal ? { signal } : undefined),
+  );
 }

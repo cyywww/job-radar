@@ -31,10 +31,10 @@ export function SystemPanel(): React.JSX.Element {
 
   return (
     <section className="system-panel" aria-live="polite">
-      <div className="page-heading">
+      <div className="page-heading system-heading--compact">
         <div>
           <p className="eyebrow">Local system status</p>
-          <h1>The foundation is listening.</h1>
+          <h2>App health</h2>
         </div>
         <button
           className="button button--quiet"

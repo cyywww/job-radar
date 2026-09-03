@@ -164,7 +164,7 @@ attempt budget is exhausted.
 Automatic attempts use exponential backoff from the configured base to maximum and stop
 at the configured attempt count; configuration rejects a maximum below the base. An explicit retry, backfill, or rescore grants one new
 bounded attempt window without resetting historical attempt numbers. No retry or
-reprocessing path deletes requirements, scores, or attempts.
+rescore path deletes requirements, scores, or attempts.
 
 Current scores are invalidated when the job snapshot, confirmed Profile version, extractor
 version, scoring version, or open/closed state changes. Requirements are invalidated when

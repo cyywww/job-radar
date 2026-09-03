@@ -213,26 +213,9 @@ export function SourcesWorkspace(): React.JSX.Element {
 
   return (
     <section className="workspace-stack" aria-labelledby="sources-heading">
-      <header className="workspace-hero workspace-hero--compact">
-        <div>
-          <p className="eyebrow">Sweden-first collection</p>
-          <h1 id="sources-heading">Platsbanken first, company pages only when needed.</h1>
-          <p>
-            JobTech searches Sweden&apos;s Data/IT field with your confirmed role
-            keywords. Add a target-company page only when it publishes valid JobPosting
-            JSON-LD.
-          </p>
-        </div>
-        <div className="source-health-strip" aria-label="Source model">
-          <span>
-            <strong>Primary</strong> JobTech / Platsbanken
-          </span>
-          <span>
-            <strong>Optional</strong> selected company pages
-          </span>
-        </div>
-      </header>
-
+      <h2 id="sources-heading" className="visually-hidden">
+        Job sources
+      </h2>
       <div className="live-message" aria-live="polite" aria-atomic="true">
         {error ? <p className="alert alert--error">{error}</p> : null}
         {notice ? <p className="alert alert--success">{notice}</p> : null}

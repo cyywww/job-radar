@@ -4,11 +4,16 @@ import { join } from 'node:path';
 
 import { afterEach, describe, expect, it } from 'vitest';
 
-import { normalizedJobSchema, type NormalizedJob } from '@job-radar/shared';
+import {
+  normalizedJobSchema,
+  reviewJobsQuerySchema,
+  type NormalizedJob,
+} from '@job-radar/shared';
 
 import type { DatabaseClient } from './database.js';
 import { openDatabase, runMigrations } from './database.js';
 import { JobRepository, ScanAlreadyActiveError } from './job-repository.js';
+import { ReviewRepository } from './review-repository.js';
 
 let database: DatabaseClient | undefined;
 
@@ -76,7 +81,14 @@ describe('JobRepository multi-source identity', () => {
       repository.ingestJob(companyPage, run.id, normalized('company-page'), new Date()),
     ).toMatchObject({ outcome: 'unchanged' });
 
-    const list = repository.listJobs({ active: true, search: '', limit: 50, offset: 0 });
+    const list = new ReviewRepository(database).listJobs(
+      reviewJobsQuerySchema.parse({
+        includeClosed: 'false',
+        search: '',
+        limit: 50,
+        offset: 0,
+      }),
+    );
     expect(list.total).toBe(1);
     expect(list.jobs[0]?.sourceCount).toBe(2);
     const detail = repository.getJob(list.jobs[0]!.id);
@@ -120,7 +132,14 @@ describe('JobRepository multi-source identity', () => {
     );
 
     expect(
-      repository.listJobs({ active: true, search: '', limit: 50, offset: 0 }).total,
+      new ReviewRepository(database).listJobs(
+        reviewJobsQuerySchema.parse({
+          includeClosed: 'false',
+          search: '',
+          limit: 50,
+          offset: 0,
+        }),
+      ).total,
     ).toBe(1);
 
     repository.applyLifecycle(jobtech, new Set(), true, now);
@@ -129,14 +148,28 @@ describe('JobRepository multi-source identity', () => {
     expect(
       repository
         .getJob(
-          repository.listJobs({ active: null, search: '', limit: 50, offset: 0 }).jobs[0]!
-            .id,
+          new ReviewRepository(database).listJobs(
+            reviewJobsQuerySchema.parse({
+              includeClosed: 'true',
+              search: '',
+              limit: 50,
+              offset: 0,
+            }),
+          ).jobs[0]!.id,
         )
         ?.sources.find((entry) => entry.sourceId === jobtech.id)?.consecutiveMisses,
     ).toBe(2);
     expect(repository.applyLifecycle(jobtech, new Set(), true, now)).toBe(1);
     expect(
-      repository.listJobs({ active: false, search: '', limit: 50, offset: 0 }).total,
+      new ReviewRepository(database).listJobs(
+        reviewJobsQuerySchema.parse({
+          includeClosed: 'true',
+          lifecycle: 'closed',
+          search: '',
+          limit: 50,
+          offset: 0,
+        }),
+      ).total,
     ).toBe(1);
   });
 
@@ -185,7 +218,14 @@ describe('JobRepository multi-source identity', () => {
       }),
       now,
     );
-    let jobs = repository.listJobs({ active: null, search: '', limit: 50, offset: 0 });
+    let jobs = new ReviewRepository(database).listJobs(
+      reviewJobsQuerySchema.parse({
+        includeClosed: 'true',
+        search: '',
+        limit: 50,
+        offset: 0,
+      }),
+    );
     expect(jobs.total).toBe(1);
     expect(repository.getJob(jobs.jobs[0]!.id)?.sources[1]?.matchStrategy).toBe(
       'canonical_url',
@@ -223,12 +263,14 @@ describe('JobRepository multi-source identity', () => {
       }),
       now,
     );
-    const compositeJob = repository.listJobs({
-      active: null,
-      search: 'Composite Role',
-      limit: 50,
-      offset: 0,
-    }).jobs[0];
+    const compositeJob = new ReviewRepository(database).listJobs(
+      reviewJobsQuerySchema.parse({
+        includeClosed: 'true',
+        search: 'Composite Role',
+        limit: 50,
+        offset: 0,
+      }),
+    ).jobs[0];
     expect(
       repository
         .getJob(compositeJob!.id)
@@ -268,7 +310,14 @@ describe('JobRepository multi-source identity', () => {
       }),
       now,
     );
-    jobs = repository.listJobs({ active: null, search: '', limit: 50, offset: 0 });
+    jobs = new ReviewRepository(database).listJobs(
+      reviewJobsQuerySchema.parse({
+        includeClosed: 'true',
+        search: '',
+        limit: 50,
+        offset: 0,
+      }),
+    );
     expect(jobs.total).toBe(4);
 
     repository.requestCancellation(run.id, now);
@@ -287,19 +336,25 @@ describe('JobRepository multi-source identity', () => {
           failed: 0,
         },
         errorCategory: 'cancelled',
-        errorSummary: 'Test scan completed before reprocessing',
+        errorSummary: 'Test scan completed',
         finishedAt: now,
       });
     }
     repository.completeScan(run.id, now);
-    expect(repository.reprocessJobs(now).merged).toBe(0);
     expect(
-      repository.listJobs({ active: null, search: '', limit: 50, offset: 0 }).total,
+      new ReviewRepository(database).listJobs(
+        reviewJobsQuerySchema.parse({
+          includeClosed: 'true',
+          search: '',
+          limit: 50,
+          offset: 0,
+        }),
+      ).total,
     ).toBe(4);
   });
 
-  it('records classified snapshot changes, reopens jobs, and preserves history on reprocess', () => {
-    const directory = mkdtempSync(join(tmpdir(), 'job-radar-reprocess-lifecycle-'));
+  it('records classified snapshot changes, reopens jobs, and preserves immutable history', () => {
+    const directory = mkdtempSync(join(tmpdir(), 'job-radar-lifecycle-'));
     database = openDatabase(join(directory, 'test.sqlite'));
     runMigrations(database);
     const repository = new JobRepository(database);
@@ -318,12 +373,14 @@ describe('JobRepository multi-source identity', () => {
       }),
       new Date('2026-09-01T12:00:00.000Z'),
     );
-    const jobId = repository.listJobs({
-      active: null,
-      search: '',
-      limit: 50,
-      offset: 0,
-    }).jobs[0]!.id;
+    const jobId = new ReviewRepository(database).listJobs(
+      reviewJobsQuerySchema.parse({
+        includeClosed: 'true',
+        search: '',
+        limit: 50,
+        offset: 0,
+      }),
+    ).jobs[0]!.id;
     const changed = repository.getJob(jobId)!;
     expect(changed.history[0]?.changedFields).toEqual(
       expect.arrayContaining(['description', 'location', 'deadline']),
@@ -365,235 +422,7 @@ describe('JobRepository multi-source identity', () => {
     });
     repository.completeScan(run.id, new Date('2026-09-02T12:00:00.000Z'));
     const snapshotCount = changed.history.length;
-    const first = repository.reprocessJobs(new Date('2026-09-03T12:00:00.000Z'));
-    const second = repository.reprocessJobs(new Date('2026-09-04T12:00:00.000Z'));
-    expect(first.snapshotsPreserved).toBe(snapshotCount);
-    expect(second).toMatchObject({ merged: 0, snapshotsPreserved: snapshotCount });
     expect(repository.getJob(jobId)?.history).toHaveLength(snapshotCount);
-  });
-
-  it('merges an unambiguous legacy URL duplicate without losing either snapshot', () => {
-    const directory = mkdtempSync(join(tmpdir(), 'job-radar-legacy-reprocess-'));
-    database = openDatabase(join(directory, 'test.sqlite'));
-    runMigrations(database);
-    const repository = new JobRepository(database);
-    const jobtech = repository.ensureDefaultSources();
-    const companyPage = targetPage(
-      repository,
-      'Legacy company page',
-      'legacy',
-      'Legacy Two AB',
-    );
-    const now = new Date('2026-08-31T12:00:00.000Z');
-    const run = repository.createScan(1, [jobtech, companyPage], [], now);
-    repository.ingestJob(
-      jobtech,
-      run.id,
-      normalized('legacy-jobtech', {
-        company: 'Legacy One AB',
-        title: 'Fictional Legacy Role One',
-        canonicalUrl: 'https://old-one.example.test/jobs/1',
-        sourceUrl: 'https://old-one.example.test/jobs/1',
-        descriptionText: 'First historical fictional description.',
-      }),
-      now,
-    );
-    repository.ingestJob(
-      companyPage,
-      run.id,
-      normalized('legacy-company-page', {
-        company: 'Legacy Two AB',
-        title: 'Fictional Legacy Role Two',
-        canonicalUrl: 'https://old-two.example.test/jobs/2',
-        sourceUrl: 'https://old-two.example.test/jobs/2',
-        descriptionText: 'Second historical fictional description.',
-      }),
-      now,
-    );
-    for (const source of [jobtech, companyPage]) {
-      repository.completeSourceRun(run.id, source.id, {
-        status: 'succeeded',
-        resultSetComplete: true,
-        pagesFetched: 1,
-        counts: {
-          discovered: 1,
-          fetched: 1,
-          created: 1,
-          updated: 0,
-          unchanged: 0,
-          closed: 0,
-          failed: 0,
-        },
-        errorCategory: null,
-        errorSummary: null,
-        finishedAt: now,
-      });
-    }
-    repository.completeScan(run.id, now);
-
-    const before = repository.listJobs({
-      active: null,
-      search: '',
-      limit: 50,
-      offset: 0,
-    });
-    expect(before.total).toBe(2);
-    database.sqlite
-      .prepare('update jobs set canonical_url = ? where id = ?')
-      .run(
-        'HTTPS://Careers.Example.test:443//jobs/legacy/?utm_source=old#apply',
-        before.jobs[0]!.id,
-      );
-    database.sqlite
-      .prepare('update jobs set canonical_url = ? where id = ?')
-      .run('https://careers.example.test/jobs/legacy', before.jobs[1]!.id);
-    database.sqlite
-      .prepare('update job_sources set source_url = ? where source_id = ?')
-      .run(
-        'HTTPS://Careers.Example.test:443//jobs/legacy/?utm_source=old#apply',
-        jobtech.id,
-      );
-
-    for (const [index, job] of before.jobs.entries()) {
-      const snapshotId = repository.getJob(job.id)!.snapshot.id;
-      const taskId = `93000000-0000-4000-8000-${String(index + 1).padStart(12, '0')}`;
-      const requirementId = `94000000-0000-4000-8000-${String(index + 1).padStart(12, '0')}`;
-      const scoreId = `95000000-0000-4000-8000-${String(index + 1).padStart(12, '0')}`;
-      const attemptId = `96000000-0000-4000-8000-${String(index + 1).padStart(12, '0')}`;
-      database.sqlite
-        .prepare(
-          `insert into scoring_tasks
-            (id, job_id, snapshot_id, profile_version, extractor_version, scoring_version,
-             status, attempt_count, max_attempts, created_at, updated_at)
-           values (?, ?, ?, 1, 'fictional-extractor-v1', 'fictional-scoring-v1',
-             'succeeded', 1, 3, ?, ?)`,
-        )
-        .run(taskId, job.id, snapshotId, now.getTime(), now.getTime());
-      database.sqlite
-        .prepare(
-          `insert into job_requirements
-            (id, task_id, job_id, snapshot_id, profile_version, extractor_version,
-             extraction_json, confidence_micros, provider, model, created_at)
-           values (?, ?, ?, ?, 1, 'fictional-extractor-v1', '{}', 900000,
-             'codex_cli', 'fictional-model', ?)`,
-        )
-        .run(requirementId, taskId, job.id, snapshotId, now.getTime());
-      database.sqlite
-        .prepare(
-          `insert into job_scores
-            (id, task_id, requirement_id, job_id, snapshot_id, profile_version,
-             scoring_version, eligible, job_active, gate_reasons_json, match_score,
-             ranking_score, ranking_factors_json, breakdown_json, matched_evidence_json,
-             gaps_json, unknowns_json, confidence_micros, provider, model, review_state,
-             explanation, ranking_as_of, created_at, updated_at)
-           values (?, ?, ?, ?, ?, 1, 'fictional-scoring-v1', 0, 1,
-             '[{"code":"company_excluded","outcome":"fail","explanation":"Fictional exclusion."}]',
-             null, null, null, null, '[]', '[]', '[]', 900000, 'codex_cli',
-             'fictional-model', 'not_required', 'Fictional historical Gate failure.',
-             null, ?, ?)`,
-        )
-        .run(
-          scoreId,
-          taskId,
-          requirementId,
-          job.id,
-          snapshotId,
-          now.getTime(),
-          now.getTime(),
-        );
-      database.sqlite
-        .prepare(
-          `insert into scoring_attempts
-            (id, task_id, attempt_number, outcome, provider, model, output_bytes,
-             started_at, finished_at)
-           values (?, ?, 1, 'succeeded', 'codex_cli', 'fictional-model', 0, ?, ?)`,
-        )
-        .run(attemptId, taskId, now.getTime(), now.getTime());
-      database.sqlite
-        .prepare(
-          `insert into job_triage (job_id, status, note, updated_at)
-           values (?, ?, ?, ?)`,
-        )
-        .run(
-          job.id,
-          index === 0 ? 'shortlisted' : 'ignored',
-          `Fictional triage ${index + 1}.`,
-          now.getTime() + index,
-        );
-      database.sqlite
-        .prepare(
-          `insert into score_feedback
-            (id, job_id, score_id, type, original_score, suggested_score, reason, created_at)
-           values (?, ?, ?, 'job_specific', null, null, ?, ?)`,
-        )
-        .run(
-          `97000000-0000-4000-8000-${String(index + 1).padStart(12, '0')}`,
-          job.id,
-          scoreId,
-          `Fictional feedback ${index + 1}.`,
-          now.getTime(),
-        );
-      database.sqlite
-        .prepare(
-          `insert into score_review_events
-            (id, job_id, score_id, previous_state, state, reason, created_at)
-           values (?, ?, ?, 'not_required', 'rejected', ?, ?)`,
-        )
-        .run(
-          `98000000-0000-4000-8000-${String(index + 1).padStart(12, '0')}`,
-          job.id,
-          scoreId,
-          `Fictional review event ${index + 1}.`,
-          now.getTime(),
-        );
-    }
-
-    const result = repository.reprocessJobs(new Date('2026-09-01T12:00:00.000Z'));
-    expect(result).toMatchObject({ processed: 2, merged: 1, snapshotsPreserved: 2 });
-    expect(result.canonicalUrlsUpdated).toBeGreaterThan(0);
-    const after = repository.listJobs({
-      active: null,
-      search: '',
-      limit: 50,
-      offset: 0,
-    });
-    expect(after.total).toBe(1);
-    const detail = repository.getJob(after.jobs[0]!.id)!;
-    expect(detail.sources).toHaveLength(2);
-    expect(detail.history).toHaveLength(2);
-    expect(detail.sources.map((source) => source.matchStrategy)).toContain('reprocessed');
-    expect(detail.sources.every((source) => source.sourceUrl.includes('utm_'))).toBe(
-      false,
-    );
-    expect(
-      database.sqlite
-        .prepare(
-          `select
-             (select count(*) from scoring_tasks where job_id = ?) as tasks,
-             (select count(*) from job_requirements where job_id = ?) as requirements,
-             (select count(*) from job_scores where job_id = ?) as scores,
-             (select count(*) from job_triage where job_id = ?) as triage,
-             (select count(*) from score_feedback where job_id = ?) as feedback,
-             (select count(*) from score_review_events where job_id = ?) as review_events,
-             (select count(*) from scoring_attempts) as attempts`,
-        )
-        .get(detail.id, detail.id, detail.id, detail.id, detail.id, detail.id),
-    ).toEqual({
-      tasks: 2,
-      requirements: 2,
-      scores: 2,
-      triage: 1,
-      feedback: 2,
-      review_events: 2,
-      attempts: 2,
-    });
-    expect(
-      database.sqlite
-        .prepare('select status, note from job_triage where job_id = ?')
-        .get(detail.id),
-    ).toEqual({ status: 'ignored', note: 'Fictional triage 2.' });
-    expect(database.sqlite.pragma('foreign_key_check')).toEqual([]);
-    expect(repository.reprocessJobs(new Date('2026-09-02T12:00:00.000Z')).merged).toBe(0);
   });
 
   it('persists config versions and rejects duplicate durable scans', () => {
@@ -611,7 +440,6 @@ describe('JobRepository multi-source identity', () => {
     expect(() => repository.createScan(1, [source], [], new Date())).toThrow(
       ScanAlreadyActiveError,
     );
-    expect(() => repository.reprocessJobs(new Date())).toThrow(ScanAlreadyActiveError);
     repository.completeSourceRun(first.id, source.id, {
       status: 'succeeded',
       resultSetComplete: true,

@@ -6,17 +6,15 @@ import {
   AppError,
   confirmProfileRequestSchema,
   confirmedProfileViewSchema,
-  createProfileRequestSchema,
-  jobPreferencesFactSchema,
-  preferencesPreviewRequestSchema,
-  preferencesPreviewResponseSchema,
+  createProfileResourceRequestSchema,
+  deleteProfileResponseSchema,
   profileImportRequestSchema,
   profileImportResponseSchema,
+  profileResourceSchema,
   profileSnapshotSchema,
+  profilesResponseSchema,
   profileVersionsResponseSchema,
-  previewPreferences,
-  updatePreferencesRequestSchema,
-  updateProfileRequestSchema,
+  updateProfileResourceRequestSchema,
 } from '@job-radar/shared';
 
 import {
@@ -27,19 +25,22 @@ import {
 import { extractProfileDraft } from '../services/profile-import.js';
 import type { ScoringCoordinator } from '../services/scoring-coordinator.js';
 
-const versionParamsSchema = z.object({ version: z.coerce.number().int().positive() });
+const profileParamsSchema = z.object({ id: z.string().uuid() }).strict();
+const profileVersionParamsSchema = profileParamsSchema
+  .extend({ version: z.coerce.number().int().positive() })
+  .strict();
 
 function mapStoreError(error: unknown): never {
   if (!(error instanceof ProfileStoreError)) throw error;
 
   const statusCode =
-    error.code === 'PROFILE_VERSION_CONFLICT'
+    error.code === 'PROFILE_VERSION_CONFLICT' ||
+    error.code === 'PROFILE_NAME_EXISTS' ||
+    error.code === 'PROFILE_LIMIT_REACHED'
       ? 409
-      : error.code === 'PROFILE_EXISTS'
-        ? 409
-        : error.code === 'PROFILE_REFERENCE_INVALID'
-          ? 400
-          : 404;
+      : error.code === 'PROFILE_REFERENCE_INVALID'
+        ? 400
+        : 404;
   throw new AppError(error.code, error.message, statusCode);
 }
 
@@ -50,96 +51,13 @@ export async function registerProfileRoutes(
 ): Promise<void> {
   const repository = new ProfileRepository(database);
 
-  app.post('/api/profile', async (request, reply) => {
-    try {
-      const profile = repository.create(createProfileRequestSchema.parse(request.body));
-      scoring.onProfileVersionChanged(profile.version);
-      return reply.status(201).send(profileSnapshotSchema.parse(profile));
-    } catch (error) {
-      return mapStoreError(error);
-    }
-  });
-
-  app.get('/api/profile', async () => {
-    const profile = repository.getCurrent();
-    if (!profile) throw new AppError('PROFILE_NOT_FOUND', 'Profile does not exist', 404);
-    return profileSnapshotSchema.parse(profile);
-  });
-
-  app.put('/api/profile', async (request) => {
-    try {
-      const profile = repository.update(updateProfileRequestSchema.parse(request.body));
-      scoring.onProfileVersionChanged(profile.version);
-      return profileSnapshotSchema.parse(profile);
-    } catch (error) {
-      return mapStoreError(error);
-    }
-  });
-
-  app.post('/api/profile/confirm', async (request) => {
-    try {
-      const profile = repository.confirm(confirmProfileRequestSchema.parse(request.body));
-      scoring.onProfileVersionChanged(profile.version);
-      return profileSnapshotSchema.parse(profile);
-    } catch (error) {
-      return mapStoreError(error);
-    }
-  });
-
-  app.get('/api/profile/versions', async () => {
-    try {
-      return profileVersionsResponseSchema.parse({
-        versions: repository.listVersions(),
-      });
-    } catch (error) {
-      return mapStoreError(error);
-    }
-  });
-
-  app.get('/api/profile/versions/:version', async (request) => {
-    const { version } = versionParamsSchema.parse(request.params);
-    const profile = repository.getVersion(version);
-    if (!profile) {
-      throw new AppError(
-        'PROFILE_VERSION_NOT_FOUND',
-        `Profile version ${version} does not exist`,
-        404,
-      );
-    }
-    return profileSnapshotSchema.parse(profile);
-  });
-
   app.get('/api/profile/confirmed', async () => {
     const profile = repository.getConfirmedView();
     if (!profile) throw new AppError('PROFILE_NOT_FOUND', 'Profile does not exist', 404);
     return confirmedProfileViewSchema.parse(profile);
   });
 
-  app.get('/api/preferences', async () => {
-    const profile = repository.getCurrent();
-    if (!profile) throw new AppError('PROFILE_NOT_FOUND', 'Profile does not exist', 404);
-    return jobPreferencesFactSchema.parse(profile.preferences);
-  });
-
-  app.put('/api/preferences', async (request) => {
-    try {
-      const profile = repository.updatePreferences(
-        updatePreferencesRequestSchema.parse(request.body),
-      );
-      scoring.onProfileVersionChanged(profile.version);
-      return profileSnapshotSchema.parse(profile);
-    } catch (error) {
-      return mapStoreError(error);
-    }
-  });
-
-  app.post('/api/preferences/preview', async (request) =>
-    preferencesPreviewResponseSchema.parse(
-      previewPreferences(preferencesPreviewRequestSchema.parse(request.body)),
-    ),
-  );
-
-  app.post('/api/profile/import', async (request) => {
+  app.post('/api/profiles/import', async (request) => {
     const input = profileImportRequestSchema.parse(request.body);
     return profileImportResponseSchema.parse(
       extractProfileDraft({
@@ -151,7 +69,7 @@ export async function registerProfileRoutes(
   });
 
   app.post(
-    '/api/profile/import/file',
+    '/api/profiles/import/file',
     { bodyLimit: MAX_PROFILE_FILE_BYTES },
     async (request) => {
       validateProfileContentType(request.headers['content-type']);
@@ -174,4 +92,129 @@ export async function registerProfileRoutes(
       );
     },
   );
+
+  app.get('/api/profiles', async () =>
+    profilesResponseSchema.parse({ profiles: repository.listProfiles() }),
+  );
+
+  app.post('/api/profiles', async (request, reply) => {
+    try {
+      const input = createProfileResourceRequestSchema.parse(request.body);
+      const profile = repository.create(input.name, input.profile);
+      scoring.onProfileVersionChanged(profile.id, profile.version);
+      return reply.status(201).send(
+        profileResourceSchema.parse({
+          summary: repository.getSummary(profile.id),
+          profile,
+        }),
+      );
+    } catch (error) {
+      return mapStoreError(error);
+    }
+  });
+
+  app.get('/api/profiles/:id', async (request) => {
+    try {
+      const { id } = profileParamsSchema.parse(request.params);
+      const profile = repository.get(id);
+      if (!profile) {
+        throw new ProfileStoreError('PROFILE_NOT_FOUND', 'Profile does not exist');
+      }
+      return profileResourceSchema.parse({
+        summary: repository.getSummary(id),
+        profile,
+      });
+    } catch (error) {
+      return mapStoreError(error);
+    }
+  });
+
+  app.put('/api/profiles/:id', async (request) => {
+    try {
+      const { id } = profileParamsSchema.parse(request.params);
+      const input = updateProfileResourceRequestSchema.parse(request.body);
+      const profile = repository.update(id, input.name, input.profile);
+      scoring.onProfileVersionChanged(profile.id, profile.version);
+      return profileResourceSchema.parse({
+        summary: repository.getSummary(id),
+        profile,
+      });
+    } catch (error) {
+      return mapStoreError(error);
+    }
+  });
+
+  app.post('/api/profiles/:id/confirm', async (request) => {
+    try {
+      const { id } = profileParamsSchema.parse(request.params);
+      const profile = repository.confirm(
+        id,
+        confirmProfileRequestSchema.parse(request.body),
+      );
+      scoring.onProfileVersionChanged(profile.id, profile.version);
+      return profileResourceSchema.parse({
+        summary: repository.getSummary(id),
+        profile,
+      });
+    } catch (error) {
+      return mapStoreError(error);
+    }
+  });
+
+  app.post('/api/profiles/:id/select', async (request) => {
+    try {
+      const { id } = profileParamsSchema.parse(request.params);
+      const profile = repository.select(id);
+      scoring.onProfileSelected(profile.id, profile.version);
+      return profileResourceSchema.parse({
+        summary: repository.getSummary(id),
+        profile,
+      });
+    } catch (error) {
+      return mapStoreError(error);
+    }
+  });
+
+  app.delete('/api/profiles/:id', async (request) => {
+    try {
+      const { id } = profileParamsSchema.parse(request.params);
+      const result = repository.delete(id);
+      if (result.activeProfileId) {
+        const activeProfile = repository.get(result.activeProfileId);
+        if (activeProfile) {
+          scoring.onProfileSelected(activeProfile.id, activeProfile.version);
+        }
+      }
+      return deleteProfileResponseSchema.parse(result);
+    } catch (error) {
+      return mapStoreError(error);
+    }
+  });
+
+  app.get('/api/profiles/:id/versions', async (request) => {
+    try {
+      const { id } = profileParamsSchema.parse(request.params);
+      return profileVersionsResponseSchema.parse({
+        versions: repository.listVersions(id),
+      });
+    } catch (error) {
+      return mapStoreError(error);
+    }
+  });
+
+  app.get('/api/profiles/:id/versions/:version', async (request) => {
+    try {
+      const { id, version } = profileVersionParamsSchema.parse(request.params);
+      const profile = repository.getVersion(id, version);
+      if (!profile) {
+        throw new ProfileStoreError(
+          'PROFILE_VERSION_NOT_FOUND',
+          `Profile version ${version} does not exist`,
+        );
+      }
+      return profileSnapshotSchema.parse(profile);
+    } catch (error) {
+      return mapStoreError(error);
+    }
+  });
 }

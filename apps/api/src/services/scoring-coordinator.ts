@@ -130,7 +130,8 @@ export class ScoringCoordinator {
   }
 
   public list(status: ScoringTaskStatus | undefined, limit: number): ScoringTask[] {
-    return this.repository.listTasks(status, limit);
+    const profile = this.profiles.getConfirmedView();
+    return profile ? this.repository.listTasks(status, limit, profile.version) : [];
   }
 
   public configuration(): ScoringConfiguration {
@@ -155,23 +156,75 @@ export class ScoringCoordinator {
       includeClosed,
       this.now(),
       true,
+      profile.profileId,
     );
   }
 
-  public onProfileVersionChanged(profileVersion: number): ScoringBackfillResult {
-    return this.repository.syncAll(profileVersion, versions, true, this.now());
+  public onProfileVersionChanged(
+    profileId: string,
+    profileVersion: number,
+  ): ScoringBackfillResult {
+    return this.repository.syncAll(
+      profileVersion,
+      versions,
+      true,
+      this.now(),
+      false,
+      profileId,
+    );
+  }
+
+  public onProfileSelected(
+    profileId: string,
+    profileVersion: number,
+  ): ScoringBackfillResult {
+    return this.repository.syncAll(
+      profileVersion,
+      versions,
+      true,
+      this.now(),
+      false,
+      profileId,
+    );
   }
 
   public syncJob(jobId: string, profileVersion: number): ScoringBackfillResult {
+    const profile = this.profiles.getConfirmedView(profileVersion);
+    if (!profile) {
+      throw new ScoringCoordinatorError(
+        'SCORING_PROFILE_NOT_READY',
+        'The selected Profile version does not exist.',
+      );
+    }
     try {
-      return this.repository.syncJob(jobId, profileVersion, versions, this.now());
+      return this.repository.syncJob(
+        jobId,
+        profileVersion,
+        versions,
+        this.now(),
+        profile.profileId,
+      );
     } catch (error) {
       return mapRepositoryError(error);
     }
   }
 
   public syncAllJobs(profileVersion: number): ScoringBackfillResult {
-    return this.repository.syncAll(profileVersion, versions, true, this.now());
+    const profile = this.profiles.getConfirmedView(profileVersion);
+    if (!profile) {
+      throw new ScoringCoordinatorError(
+        'SCORING_PROFILE_NOT_READY',
+        'The selected Profile version does not exist.',
+      );
+    }
+    return this.repository.syncAll(
+      profileVersion,
+      versions,
+      true,
+      this.now(),
+      false,
+      profile.profileId,
+    );
   }
 
   public rescoreJob(jobId: string): ScoringTask {
@@ -188,6 +241,7 @@ export class ScoringCoordinator {
         profile.version,
         versions,
         this.now(),
+        profile.profileId,
       );
     } catch (error) {
       return mapRepositoryError(error);
@@ -208,6 +262,7 @@ export class ScoringCoordinator {
         profile.version,
         versions,
         this.now(),
+        profile.profileId,
       );
     } catch (error) {
       return mapRepositoryError(error);
@@ -215,20 +270,31 @@ export class ScoringCoordinator {
   }
 
   public retry(taskId: string): ScoringTask {
+    const profile = this.profiles.getConfirmedView();
+    if (!profile) {
+      throw new ScoringCoordinatorError(
+        'SCORING_PROFILE_NOT_READY',
+        'A confirmed Profile is required before retrying a task.',
+      );
+    }
     try {
-      return this.repository.retry(taskId, this.now());
+      return this.repository.retry(taskId, this.now(), profile.version);
     } catch (error) {
       return mapRepositoryError(error);
     }
   }
 
   public retryFailed(limit: number): ScoringTask[] {
-    return this.repository.retryFailed(limit, this.now());
+    const profile = this.profiles.getConfirmedView();
+    return profile ? this.repository.retryFailed(limit, this.now(), profile.version) : [];
   }
 
   public getJobHistory(jobId: string) {
     try {
-      return this.repository.getJobHistory(jobId);
+      return this.repository.getJobHistory(
+        jobId,
+        this.profiles.getConfirmedView()?.profileId ?? null,
+      );
     } catch (error) {
       return mapRepositoryError(error);
     }
@@ -251,6 +317,14 @@ export class ScoringCoordinator {
       );
     }
     this.active = true;
+    const activeProfile = this.profiles.getConfirmedView();
+    if (!activeProfile) {
+      this.active = false;
+      throw new ScoringCoordinatorError(
+        'SCORING_PROFILE_NOT_READY',
+        'A confirmed Profile is required before scoring jobs.',
+      );
+    }
     const result: ScoringProcessResult = {
       claimed: 0,
       succeeded: 0,
@@ -268,7 +342,7 @@ export class ScoringCoordinator {
     try {
       for (let index = 0; index < limit; index += 1) {
         if (signal?.aborted) break;
-        const claimed = this.repository.claimNext(this.now());
+        const claimed = this.repository.claimNext(this.now(), activeProfile.version);
         if (!claimed) break;
         result.claimed += 1;
         const processed = await this.processClaimed(claimed, signal);
@@ -321,7 +395,14 @@ export class ScoringCoordinator {
         now: this.now(),
       });
       if (currentProfile)
-        this.repository.syncAll(currentProfile.version, versions, true, this.now());
+        this.repository.syncAll(
+          currentProfile.version,
+          versions,
+          true,
+          this.now(),
+          false,
+          currentProfile.profileId,
+        );
       return { outcome: 'failed', usage: null };
     }
     let providerAudit: {

@@ -16,8 +16,8 @@ import {
   type DatabaseClient,
 } from '@job-radar/db';
 import {
-  jobDetailSchema,
-  jobsResponseSchema,
+  jobReviewDetailSchema,
+  reviewJobsResponseSchema,
   scanRunSchema,
   type ScanRun,
 } from '@job-radar/shared';
@@ -151,8 +151,8 @@ beforeEach(async () => {
   );
   await app.inject({
     method: 'POST',
-    url: '/api/profile',
-    payload: createFictionalProfileInput(),
+    url: '/api/profiles',
+    payload: { name: 'Fictional profile', profile: createFictionalProfileInput() },
   });
 });
 
@@ -162,12 +162,12 @@ describe('job scan API', () => {
   it('runs the fixture pipeline, stores full details, and remains idempotent', async () => {
     const first = await startScan();
     const jobsResponse = await app.inject({ method: 'GET', url: '/api/jobs' });
-    const jobList = jobsResponseSchema.parse(jobsResponse.json());
+    const jobList = reviewJobsResponseSchema.parse(jobsResponse.json());
     const detailResponse = await app.inject({
       method: 'GET',
       url: `/api/jobs/${jobList.jobs[0]?.id}`,
     });
-    const detail = jobDetailSchema.parse(detailResponse.json());
+    const detail = jobReviewDetailSchema.parse(detailResponse.json()).job;
 
     expect(first.status).toBe('succeeded');
     expect(first.counts).toMatchObject({
@@ -212,15 +212,15 @@ describe('job scan API', () => {
     mode = 'empty';
     await startScan();
     await startScan();
-    const beforeThreshold = jobsResponseSchema.parse(
+    const beforeThreshold = reviewJobsResponseSchema.parse(
       (await app.inject({ method: 'GET', url: '/api/jobs' })).json(),
     );
     const threshold = await startScan();
-    const active = jobsResponseSchema.parse(
+    const active = reviewJobsResponseSchema.parse(
       (await app.inject({ method: 'GET', url: '/api/jobs' })).json(),
     );
-    const all = jobsResponseSchema.parse(
-      (await app.inject({ method: 'GET', url: '/api/jobs?active=all' })).json(),
+    const all = reviewJobsResponseSchema.parse(
+      (await app.inject({ method: 'GET', url: '/api/jobs?includeClosed=true' })).json(),
     );
 
     expect(beforeThreshold.total).toBe(3);
@@ -230,32 +230,14 @@ describe('job scan API', () => {
 
     mode = 'success';
     await startScan();
-    const reopened = jobsResponseSchema.parse(
+    const reopened = reviewJobsResponseSchema.parse(
       (await app.inject({ method: 'GET', url: '/api/jobs' })).json(),
     );
     expect(reopened.total).toBe(3);
     expect(reopened.jobs.every((job) => job.lifecycleStatus === 'open')).toBe(true);
   });
 
-  it('reprocesses captured jobs without changing immutable snapshot history', async () => {
-    await startScan();
-    const before = database.sqlite
-      .prepare('select count(*) as count from job_snapshots')
-      .get() as { count: number };
-    const response = await app.inject({ method: 'POST', url: '/api/jobs/reprocess' });
-    expect(response.statusCode).toBe(200);
-    expect(response.json()).toMatchObject({
-      processed: 3,
-      merged: 0,
-      snapshotsPreserved: before.count,
-    });
-    const after = database.sqlite
-      .prepare('select count(*) as count from job_snapshots')
-      .get() as { count: number };
-    expect(after.count).toBe(before.count);
-  });
-
-  it('refreshes one current source job without running historical reprocessing', async () => {
+  it('refreshes one current source job without scanning other sources', async () => {
     await startScan();
     const target = database.sqlite
       .prepare('select job_id as jobId from job_sources where source_job_id = ?')
@@ -313,7 +295,7 @@ describe('job scan API', () => {
   it('keeps sibling jobs when one detail request fails', async () => {
     mode = 'partial';
     const run = await startScan();
-    const jobList = jobsResponseSchema.parse(
+    const jobList = reviewJobsResponseSchema.parse(
       (await app.inject({ method: 'GET', url: '/api/jobs' })).json(),
     );
 
@@ -337,8 +319,8 @@ describe('job scan API', () => {
         'select consecutive_misses as consecutiveMisses, active from job_sources where source_job_id = ?',
       )
       .get('fictional-job-103') as { consecutiveMisses: number; active: number };
-    const all = jobsResponseSchema.parse(
-      (await app.inject({ method: 'GET', url: '/api/jobs?active=all' })).json(),
+    const all = reviewJobsResponseSchema.parse(
+      (await app.inject({ method: 'GET', url: '/api/jobs?includeClosed=true' })).json(),
     );
 
     expect(run.sourceRuns[0]).toMatchObject({

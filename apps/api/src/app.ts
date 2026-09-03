@@ -16,9 +16,9 @@ import type { AIProvider } from '@job-radar/scoring';
 import { AppError, errorResponseSchema } from '@job-radar/shared';
 
 import { registerHealthRoutes } from './routes/health.js';
-import { registerJobRoutes } from './routes/jobs.js';
+import { registerCollectionRoutes } from './routes/collection.js';
 import { registerProfileRoutes } from './routes/profile.js';
-import { registerReviewRoutes } from './routes/review.js';
+import { registerJobRoutes } from './routes/jobs.js';
 import { registerScoringRoutes } from './routes/scoring.js';
 import { ScanCoordinator } from './services/scan-coordinator.js';
 import { ScoringCoordinator } from './services/scoring-coordinator.js';
@@ -114,9 +114,9 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
     ...(options.connectors ? { connectors: options.connectors } : {}),
     scoring,
   });
-  await registerJobRoutes(app, options.database, coordinator);
+  await registerCollectionRoutes(app, coordinator);
   await registerScoringRoutes(app, scoring);
-  await registerReviewRoutes(app, options.database, coordinator, scoring);
+  await registerJobRoutes(app, options.database, coordinator, scoring);
 
   const indexPath = join(options.config.webDistDir, 'index.html');
   const assetsPath = join(options.config.webDistDir, 'assets');

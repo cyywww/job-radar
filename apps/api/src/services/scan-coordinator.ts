@@ -23,7 +23,6 @@ import {
   type CreateSourceRequest,
   type CreateScanRequest,
   type RunCounts,
-  type ReprocessJobsResult,
   type ScanRun,
   type Source,
   type SourceErrorCategory,
@@ -336,29 +335,6 @@ export class ScanCoordinator {
     if (!this.active) return;
     this.active.controller.abort();
     await this.active.promise;
-  }
-
-  public reprocessJobs(): ReprocessJobsResult {
-    if (this.active || this.jobs.hasActiveScan()) {
-      throw new ScanCoordinatorError(
-        'SCAN_ALREADY_RUNNING',
-        'Wait for the active scan before reprocessing historical jobs',
-      );
-    }
-    try {
-      const result = this.jobs.reprocessJobs(this.now());
-      const profile = this.profiles.getConfirmedView();
-      if (profile) this.scoring?.syncAllJobs(profile.version);
-      return result;
-    } catch (error) {
-      if (error instanceof ScanAlreadyActiveError) {
-        throw new ScanCoordinatorError(
-          'SCAN_ALREADY_RUNNING',
-          'Wait for the active scan before reprocessing historical jobs',
-        );
-      }
-      throw error;
-    }
   }
 
   private async execute(
