@@ -1,114 +1,57 @@
 # Job Radar
 
-A local-first workspace for finding Swedish Data/IT jobs. Choose a Profile, collect
-jobs, analyze a pending job, then save or ignore the result.
+A public, read-only showcase of Swedish software roles. A small TypeScript collector samples the official JobTech Search API, validates and narrows the data, and publishes one JSON feed. A static React site serves the feed through CloudFront. No accounts, candidate profiles, AI scoring, or database are involved.
 
-## Run locally
+When published, the page will show a **bounded sample**, not a complete job board. It links to each original advertisement. A missing structured language field does not mean Swedish is unnecessary.
 
-Requires Node.js 22.12+ and pnpm 10+.
+## Architecture
+
+```text
+EventBridge Scheduler → Node.js Lambda → private, versioned S3 JSON
+                                            ↓
+Vite/React static assets → private S3 → CloudFront HTTPS → browser
+```
+
+The code lives in three pnpm workspaces:
+
+- `packages/shared`: Zod contract for the public feed.
+- `apps/ingest`: bounded JobTech collection and Lambda publisher.
+- `apps/web`: static React page with search, region filter, source links, and stale/error states.
+
+`infra/template.yaml` defines the site in Stockholm; `infra/budget.yaml` defines the account budget in `us-east-1`, the region supported by AWS Budgets CloudFormation. `scripts/deploy.sh` is an explicit manual deployment command. The former local Fastify/SQLite/Profile/scoring app was retired; see Git history for its implementation.
+
+## Local development
+
+Requires Node.js 22.12+ and pnpm 11.19.0.
 
 ```bash
 pnpm install
 pnpm dev
 ```
 
-Development applies SQLite migrations and starts:
-
-- Web: `http://127.0.0.1:5173`
-- API: `http://127.0.0.1:8787`
-
-Stop both with `Ctrl+C`. For a production-style local run, use
-`pnpm build && pnpm start`; the API serves the built Web app on port 8787.
-
-Environment files are optional. To enable real AI analysis, authenticate Codex CLI
-and set an explicit model in `.env.local`:
-
-```dotenv
-JOB_RADAR_CODEX_MODEL=your-approved-codex-model
-```
-
-Without a configured model, Profile management, collection, and review remain usable.
-Analysis is explicit, one pending job per normal UI click; no scheduler or resident
-worker runs in the background. Actual token usage is recorded, not a claimed USD cap.
-
-## Daily workflow
-
-1. **Profiles** — create, name, select, edit, or delete a Profile. Start with a target
-   role; location is optional and core skills are recommended. Import, extra evidence,
-   filters, and version history are secondary disclosures.
-2. **Opportunities** — update jobs, analyze the next waiting job, and save or ignore
-   matches. Search and four quick views are primary; advanced filters and batch tools
-   stay collapsed.
-3. **Settings** — manage sources and inspect local system health.
-
-The selected Profile drives searches, score queues, and displayed matches. Profile
-versions and scores are independent; jobs, sources, and triage are shared locally.
-Deleting a Profile removes its derived scoring and review data, but retains global jobs.
-
-## Architecture
-
-```text
-apps/
-  api/src/routes/       HTTP boundaries: profile, collection, jobs, scoring, health
-  api/src/services/     Scan and scoring orchestration, deterministic Profile import
-  web/src/api/          Shared HTTP client and validated API adapters
-  web/src/features/
-    jobs/              Opportunities orchestration, filters, results, detail
-    profile/           Profile editor and management
-    settings/          Source controls and system status
-  web/src/styles/       Shared UI styles
-packages/
-  shared/              Zod contracts and shared domain rules
-  config/              Environment parsing and safe logging
-  db/                  SQLite schema, migrations, repositories
-  connectors/          JobTech and limited target-page collection
-  scoring/             Codex extraction, audit, Gate, deterministic scoring
-  testing/             Fictional fixtures
-docs/                   Decisions, source/scoring contracts, verification
-config/ data/ logs/      Local runtime directories, not committed personal data
-```
-
-Collection follows confirmed role queries → connector → normalized job →
-deterministic identity/snapshots → pending scoring tasks. Explicit analysis follows
-Codex extraction → evidence audit → code-owned eligibility Gate → deterministic
-match/ranking scores → SQLite → Opportunities.
-
-JobTech / Platsbanken is the sole broad source. An optional public company page may
-provide `JobPosting` JSON-LD; there is no crawler or ATS adapter matrix.
-
-## API surface
-
-- `GET/POST /api/profiles`; `GET/PUT/DELETE /api/profiles/:id`.
-- `POST /api/profiles/:id/select` and `/confirm`; `GET /api/profiles/:id/versions`
-  and `/versions/:version`.
-- `POST /api/profiles/import` and `/api/profiles/import/file`.
-- `GET /api/profile/confirmed` is the intentional selected-Profile privacy boundary,
-  not a singleton CRUD endpoint.
-- `GET /api/jobs` and `/api/jobs/:id` are the only job list/detail read models.
-  They include review/scoring state; use `includeClosed=true` to include closed jobs.
-- `/api/sources`, `/api/scans`, `/api/scoring`, and job-specific actions provide
-  collection, explicit analysis, triage/undo, and feedback.
-- `GET /api/health` and `/api/readiness` expose system-only health.
-
-There are no legacy endpoint aliases. Dashboard, singleton Profile CRUD, standalone
-preferences, `/api/review/jobs`, and historical job reprocessing are removed.
-
-## Safety and verification
-
-Only confirmed candidate facts cross `ProfileRepository.getConfirmedView()`.
-AI cannot set formal scores or execute job-posting instructions. Full profiles,
-resumes, JDs, prompts, tokens, and secrets are excluded from normal logs. The server
-binds to loopback. Scans send role queries to sources; explicit AI analysis sends only
-the minimized confirmed evidence and job snapshot needed for extraction.
+The page opens at `http://127.0.0.1:5173`. Without a published `/data/latest.json`, it shows the expected empty/error state. No live source request runs during `pnpm dev` or tests.
 
 ```bash
 pnpm check
 pnpm format:check
-pnpm --filter @job-radar/scoring eval
+pnpm build
+pnpm start
 ```
 
-Tests use fictional data and disposable databases, never live sources or real AI.
-Schema migrations and immutable user history are retained; runtime compatibility
-code is not. See [implementation status](docs/implementation-status.md),
-[testing](docs/testing.md), [collection](docs/connectors.md), and
-[scoring](docs/scoring.md) for exact boundaries.
+`pnpm start` previews the static build at `http://127.0.0.1:4173` on loopback.
+
+## AWS deployment
+
+The reviewed infrastructure uses `eu-north-1`, Lambda ARM64 with 256 MB memory, EventBridge Scheduler, a private versioned S3 bucket, CloudFront Origin Access Control, 14-day log retention, and an account-level $5 monthly budget alert. It uses the CloudFront default domain, so a domain purchase is unnecessary.
+
+Before deployment, create a private S3 artifact bucket in `eu-north-1`, use AWS credentials with CloudFormation/IAM/Lambda/S3/CloudFront/Scheduler/Budgets access, and choose an email for the budget notice. Then run:
+
+```bash
+AWS_REGION=eu-north-1 scripts/deploy.sh <artifact-bucket-name> <budget-email>
+```
+
+This command **creates cloud resources and publishes a public site**. In this project conversation, it must not be run until the user explicitly authorizes that action. See [operations](docs/operations.md) for checks, rollback, cleanup, and cost caveats.
+
+## Why this scope
+
+A scheduled read-only data product is enough to demonstrate API integration, TypeScript, validation, failure handling, least-privilege IAM, infrastructure as code, CI, and cloud delivery. The detailed [implementation plan](Job%20Radar%20implementation%20plan.md) explains market evidence and limitations. [Status](docs/implementation-status.md) and [testing](docs/testing.md) record what has actually been verified.

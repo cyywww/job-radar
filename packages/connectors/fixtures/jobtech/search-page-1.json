@@ -1,7 +1,0 @@
-{
-  "total": { "value": 3 },
-  "hits": [
-    { "id": "fictional-job-101", "headline": "Product Engineer" },
-    { "id": "fictional-job-102", "headline": "Frontend Developer" }
-  ]
-}

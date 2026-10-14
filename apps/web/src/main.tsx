@@ -2,13 +2,10 @@ import { StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
 
 import App from './App.js';
-import './styles/main.css';
+import './styles.css';
 
 const root = document.querySelector<HTMLDivElement>('#root');
-
-if (!root) {
-  throw new Error('Root element not found');
-}
+if (!root) throw new Error('Root element not found');
 
 createRoot(root).render(
   <StrictMode>

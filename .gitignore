@@ -5,20 +5,15 @@ dist/
 coverage/
 *.tsbuildinfo
 *.log
-*.pid
 
 # Local environment and secrets
 .env
 .env.*
-!.env.example
 
-# Local runtime state
-/data/*
-!/data/.gitkeep
-/logs/*
-!/logs/.gitkeep
-/config/*
-!/config/.gitkeep
+# Local data from previous versions
+/data/
+/logs/
+/config/
 *.sqlite
 *.sqlite-shm
 *.sqlite-wal
@@ -32,19 +27,11 @@ coverage/
 *.db-wal
 *.db-journal
 
-# Local imports, backups, and test reports
+# Local imports and backups
 /uploads/
 /imports/
 /backups/
 /tmp/
-/test-results/
-/playwright-report/
-/blob-report/
-.playwright/
-.nyc_output/
-*.lcov
-.vitest/
-.cache/
 
 # Personal material must never enter source control
 private/
@@ -59,6 +46,7 @@ applications/
 ._*
 .idea/
 .vscode/
+.claude/
 
 # Tool caches
 .codex/
